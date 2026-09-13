@@ -1,0 +1,32 @@
+# ---------------------------------------------------------------------------
+# Lista ao contrario, de proposito.
+#
+# Esta pasta e' ao mesmo tempo o projeto e o lugar onde ficam as multipistas das
+# musicas — conteudo licenciado de terceiros, centenas de MB por musica. Em vez
+# de listar o que excluir (e esquecer de alguma coisa), ignoramos tudo e
+# liberamos so o codigo. Assim uma pasta de musica nova nunca vaza sem querer.
+#
+# Ao acrescentar um arquivo de codigo novo na raiz, libere aqui tambem.
+# ---------------------------------------------------------------------------
+/*
+
+!/.gitignore
+!/README.md
+!/package.json
+!/package-lock.json
+!/instalar.command
+!/main.js
+!/server.js
+!/osc.js
+!/mixer-state.js
+!/public/
+!/scripts/
+!/build/
+
+# Intermediarios do icone: "npm run icone" refaz tudo a partir do script. O
+# icon.icns e o icon.ico ficam versionados para o build funcionar logo apos um
+# clone, sem precisar rodar o gerador antes.
+build/icone.iconset/
+build/icone-1024.png
+
+.DS_Store

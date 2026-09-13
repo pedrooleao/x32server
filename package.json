@@ -1,0 +1,21 @@
+{
+  "name": "mesa-playback",
+  "version": "0.1.0",
+  "description": "Emula uma mesa X32 na rede e toca os stems do playback, controlada pelo Mixing Station",
+  "author": "Pedro",
+  "license": "MIT",
+  "main": "main.js",
+  "scripts": {
+    "start": "node server.js",
+    "app": "electron .",
+    "dmg": "./scripts/montar-app.sh",
+    "icone": "node scripts/fazer-icone.js",
+    "windows": "./scripts/montar-windows.sh"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0"
+  }
+}
