@@ -1,0 +1,82 @@
+# Monta e TESTA a versao de Windows numa maquina Windows de verdade.
+#
+# O pacote e' montado a partir do Mac, onde nao ha como executar um .exe. Este
+# fluxo fecha esse buraco: sobe o app numa maquina Windows, fala OSC com ele e
+# confere que a mesa responde. E' onde apareceria um problema de plataforma —
+# bind de UDP, caminho de arquivo, o Electron nao subir.
+
+name: Windows
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  montar-e-testar:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      # --- o codigo da mesa, antes de empacotar ------------------------------
+      - name: Testar a mesa rodando no Node
+        shell: pwsh
+        run: |
+          $mesa = Start-Process node -ArgumentList 'server.js' -PassThru -NoNewWindow
+          Start-Sleep -Seconds 4
+          try {
+            node scripts/teste-fumaca.js
+            if ($LASTEXITCODE -ne 0) { throw "teste de fumaca falhou" }
+          } finally {
+            Stop-Process -Id $mesa.Id -Force -ErrorAction SilentlyContinue
+          }
+
+      # --- o pacote portatil -------------------------------------------------
+      # No Windows o npm ci ja baixa o Electron desta plataforma, entao a base
+      # do pacote sai de node_modules/electron/dist — nao precisa baixar zip.
+      - name: Montar o pacote portatil
+        shell: pwsh
+        run: |
+          $nome = 'Mesa de Playback'
+          $pasta = "pacote/$nome"
+          New-Item -ItemType Directory -Force -Path $pasta | Out-Null
+          Copy-Item 'node_modules/electron/dist/*' $pasta -Recurse -Force
+
+          $app = "$pasta/resources/app"
+          New-Item -ItemType Directory -Force -Path "$app/node_modules" | Out-Null
+          foreach ($f in 'main.js','server.js','osc.js','mixer-state.js','package.json') {
+            Copy-Item $f "$app/$f"
+          }
+          Copy-Item 'public' "$app/public" -Recurse
+          Copy-Item 'node_modules/ws' "$app/node_modules/ws" -Recurse
+          Copy-Item 'build/icon.ico' "$app/icone.ico"
+          Rename-Item "$pasta/electron.exe" "$nome.exe"
+
+      # --- o .exe empacotado sobe e responde? --------------------------------
+      - name: Testar o app empacotado
+        shell: pwsh
+        run: |
+          $exe = "pacote/Mesa de Playback/Mesa de Playback.exe"
+          $app = Start-Process $exe -PassThru
+          Start-Sleep -Seconds 12
+          try {
+            if ($app.HasExited) { throw "o app fechou sozinho (codigo $($app.ExitCode))" }
+            node scripts/teste-fumaca.js
+            if ($LASTEXITCODE -ne 0) { throw "o app subiu mas a mesa nao respondeu" }
+          } finally {
+            Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Guardar o pacote
+        uses: actions/upload-artifact@v4
+        with:
+          name: mesa-playback-windows-x64
+          path: pacote/

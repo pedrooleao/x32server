@@ -22,6 +22,7 @@
 !/public/
 !/scripts/
 !/build/
+!/.github/
 
 # Intermediarios do icone: "npm run icone" refaz tudo a partir do script. O
 # icon.icns e o icon.ico ficam versionados para o build funcionar logo apos um
