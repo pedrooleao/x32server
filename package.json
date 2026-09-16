@@ -1,6 +1,6 @@
 {
   "name": "mesa-playback",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Emula uma mesa X32 na rede e toca os stems do playback, controlada pelo Mixing Station",
   "author": "Pedro",
   "license": "MIT",
