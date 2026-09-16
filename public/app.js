@@ -35,6 +35,7 @@ function connect() {
     const msg = JSON.parse(ev.data);
     if (msg.type === 'snapshot') {
       msg.state.channels.forEach((c, i) => applyChannel(i, c));
+      aplicarSolos(msg.state.channels.map((c) => c.solo));
       main.fader = msg.state.main.fader;
       main.on = msg.state.main.on;
       refreshMaster();
@@ -44,12 +45,18 @@ function connect() {
   };
 }
 
-function handleParam({ address, value, gain, channel: msgState }) {
+function handleParam({ address, value, gain, channel: msgState, solos }) {
   // Ganho de preamp: chega sem numero de canal. O servidor ja resolveu de qual
   // canal e', pelo foco, e manda o bloco do canal em msgState.
   if (/^\/headamp\/\d{1,3}\/gain$/.test(address)) {
     const t = msgState && tracks[msgState.num - 1];
     if (t) applyTrim(t, msgState.ha, msgState.trim);
+    return;
+  }
+
+  // Solo: o servidor manda o quadro inteiro, porque um solo mexe em todos.
+  if (/^\/-stat\/solosw\/\d{1,2}$/.test(address)) {
+    if (solos) aplicarSolos(solos);
     return;
   }
 
@@ -92,6 +99,7 @@ function applyChannel(i, c) {
   if (!t) return;
   t.fader = c.fader;
   t.on = c.on;
+  t.solo = c.solo || 0;
   rampGain(t);
   applyTrim(t, c.ha, c.trim);
   if (c.eq) applyEqAll(t, c.eq);
@@ -126,8 +134,38 @@ function faderToGain(f) {
   const db = faderToDb(f);
   return isFinite(db) ? Math.pow(10, db / 20) : 0;
 }
+// Um canal se ouve quando esta ativo E (ninguem em solo OU ele em solo).
+//
+// Numa X32 de verdade o solo vai para o barramento de monitoracao, nao para o
+// LR: soloar nao muda o som da casa. Aqui so existe uma saida estereo, entao
+// fazemos "solo in place" — que e' tambem o que o aluno espera ao apertar solo,
+// e a propria X32 oferece como opcao no menu de monitoracao.
+//
+// O mute continua mandando: soloar um canal mudo nao o traz de volta. E' a regra
+// mais simples de explicar em aula — mute silencia, solo isola.
+function soloAtivo() {
+  return tracks.some((t) => t.solo);
+}
+
+function audivel(t) {
+  if (!t.on) return false;
+  return soloAtivo() ? !!t.solo : true;
+}
+
 function rampGain(t) {
-  t.gain.gain.setTargetAtTime(t.on ? faderToGain(t.fader) : 0, ctx.currentTime, 0.015);
+  t.gain.gain.setTargetAtTime(audivel(t) ? faderToGain(t.fader) : 0, ctx.currentTime, 0.015);
+}
+
+// Mexer no solo de UM canal muda quem se ouve em todos: liga o solo do canal 3
+// e os outros 31 calam. Por isso o recalculo e' geral, nao do canal tocado.
+function aplicarSolos(lista) {
+  tracks.forEach((t, i) => {
+    t.solo = lista && lista[i] ? 1 : 0;
+  });
+  tracks.forEach((t, i) => {
+    rampGain(t);
+    paintStrip(i);
+  });
 }
 
 const RATIOS = [1.1, 1.3, 1.5, 2, 2.5, 3, 4, 5, 7, 10, 20, 100];
@@ -422,6 +460,7 @@ el('picker').addEventListener('change', async (ev) => {
       analyser,
       data: new Float32Array(analyser.fftSize),
       on: 1,
+      solo: 0,
       fader: 0.75,
       dynSeq: 0,
       eqTypes: [1, 2, 2, 4],
@@ -579,8 +618,21 @@ function paintStrip(i) {
   if (!db || !t) return;
   const v = faderToDb(t.fader);
   db.textContent = isFinite(v) ? `${v >= 0 ? '+' : ''}${v.toFixed(1)} dB` : '−∞';
-  st.textContent = t.on ? 'ativo' : 'mudo';
-  st.className = `state ${t.on ? 'on' : 'off'}`;
+  // Tres situacoes diferentes, e vale distinguir na tela: o canal isolado, os
+  // que o solo alheio calou, e o mute de verdade.
+  if (!t.on) {
+    st.textContent = 'mudo';
+    st.className = 'state off';
+  } else if (t.solo) {
+    st.textContent = 'solo';
+    st.className = 'state solo';
+  } else if (soloAtivo()) {
+    st.textContent = 'calado';
+    st.className = 'state calado';
+  } else {
+    st.textContent = 'ativo';
+    st.className = 'state on';
+  }
 }
 
 function fmt(s) {

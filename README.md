@@ -100,10 +100,33 @@ for f in *.m4a; do afconvert -f WAVE -d LEI16@44100 "$f" "${f%.m4a}.wav"; done
 | EQ de 4 bandas | ok — LCut, LShv, PEQ, HShv, HCut |
 | Gate | ok — threshold, range, attack, hold, release |
 | Compressor | ok — threshold, ratio, knee, attack, release, makeup |
+| Solo | ok — `/-stat/solosw/NN`, em *solo in place* |
 | Envios para bus / mix de monitor | valor guardado, sem roteamento de áudio |
 | Cenas e snapshots | não |
 | `/showdump` | ok — devolve o cabeçalho do showfile, sem cues nem cenas |
 | Demais endereços do X32 | respondidos com valor neutro, só para o sync passar |
+
+## O solo é "solo in place"
+
+Numa X32 de verdade o solo vai para o **barramento de monitoração**, não para o
+LR: soloar um canal não muda o som que a casa ouve, só o que o operador ouve no
+fone. Aqui existe uma saída estéreo só, então o solo cala os outros canais na
+saída principal — o que a X32 chama de *solo in place* e oferece como opção no
+menu de monitoração.
+
+É também o que o aluno espera ao apertar solo: ouvir só aquele canal.
+
+O endereço é `/-stat/solosw/NN`, numerado de 01 a 80 (canais, aux, fx, buses…);
+só os 32 primeiros mexem no áudio. A mesa também mantém o `/-stat/solo`, o
+aviso de "tem algum solo ligado", que ela acende sozinha.
+
+Duas decisões que valem saber:
+
+- **O mute manda mais que o solo.** Soloar um canal mudo não o traz de volta.
+  É a regra mais simples de explicar em aula: mute silencia, solo isola.
+- **O servidor manda o quadro inteiro de solos**, não só o canal tocado. Ligar
+  o solo do canal 3 muda o que se ouve nos outros 31, então o navegador precisa
+  recalcular todos — não dá para tratar como mais um parâmetro de canal.
 
 ## O ganho e o canal em foco
 

@@ -337,6 +337,25 @@ class MixerState {
       }
     }
 
+    // Solo. Na X32 nao e' um endereco de canal: e' /-stat/solosw/NN, numerado
+    // de 01 a 80 (canais, aux, fx, bus, matrizes...). So os 32 primeiros nos
+    // interessam. O /-stat/solo e' o aviso de "tem algum solo ligado", que a
+    // mesa acende sozinha — so leitura.
+    m = address.match(/^\/-stat\/solosw\/(\d{1,2})$/);
+    if (m) {
+      const ch = this.channel(parseInt(m[1], 10));
+      if (ch) {
+        if (write) ch.solo = newValue ? 1 : 0;
+        return { type: 'i', value: ch.solo };
+      }
+      // Fora dos 32 canais (aux, fx, bus): guarda e devolve, sem efeito.
+      return this.extraAccess(address, newValue);
+    }
+
+    if (address === '/-stat/solo') {
+      return { type: 'i', value: this.soloAtivo() ? 1 : 0 };
+    }
+
     switch (address) {
       case '/main/st/mix/fader':
         if (write) this.main.fader = clamp01(newValue);
@@ -526,6 +545,11 @@ class MixerState {
     return paths;
   }
 
+  /** Ha algum canal em solo? */
+  soloAtivo() {
+    return this.channels.some((c) => c.solo);
+  }
+
   /** Snapshot enviado ao navegador para montar a engine de audio. */
   snapshot() {
     return {
@@ -535,6 +559,7 @@ class MixerState {
         color: c.color,
         fader: c.fader,
         on: c.on,
+        solo: c.solo,
         pan: c.pan,
         gain: faderToGain(c.fader),   // ganho do fader, ja convertido
         trim: c.trim,                 // trim digital, 0..1 = -18 a +18 dB

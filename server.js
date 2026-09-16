@@ -337,20 +337,30 @@ function pushToBrowser(address, written) {
   let channel;
   const chMatch = address.match(/^\/ch\/(\d{2})\//);
   const haMatch = address.match(/^\/headamp\/(\d{1,3})\/gain$/);
+  // O solo tambem chega sem numero de canal no formato de sempre: e' o
+  // /-stat/solosw/NN, numerado de 01 a 80.
+  const soloMatch = address.match(/^\/-stat\/solosw\/(\d{1,2})$/);
   const num = chMatch
     ? parseInt(chMatch[1], 10)
     : haMatch
       ? parseInt(haMatch[1], 10) + 1
-      : null;
+      : soloMatch
+        ? parseInt(soloMatch[1], 10)
+        : null;
   if (num) {
     const c = state.channel(num);
     if (c) channel = { num, eq: c.eq, gate: c.gate, dyn: c.dyn, trim: c.trim, ha: c.gain };
   }
 
+  // O solo muda quem se ouve em TODOS os canais, nao so no que foi tocado:
+  // ligar o solo do canal 3 cala os outros 31. Entao mandamos o quadro inteiro.
+  const solos = soloMatch ? state.channels.map((c) => c.solo) : undefined;
+
   const payload = JSON.stringify({
     type: 'param',
     address,
     channel,
+    solos,
     value: written.value,
     gain: written.type === 'f' && /mix\/fader$/.test(address) ? faderToGain(written.value) : undefined,
   });
