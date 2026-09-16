@@ -505,6 +505,178 @@ const FORMATOS = [
 ];
 
 let gravador = null;
+let exportando = false;
+
+// --- exportacao acelerada ---------------------------------------------------
+//
+// O gargalo nunca foi o processamento: era o codificador, que grava em tempo
+// real. Aqui renderizamos cada canal offline (cerca de 200x mais rapido) e
+// codificamos com WebCodecs.
+//
+// Canal por canal, e nao todos juntos, por causa de memoria: 17 stems de 12 min
+// decodificados ao mesmo tempo dao uns 4,3 GB. Um de cada vez, somando num
+// acumulador, o pico fica em torno de 750 MB.
+//
+// Somar depois da' o mesmo resultado que somar durante: as cadeias de canal sao
+// independentes ate o barramento, e o fader do LR e' so um ganho no fim.
+
+function copiarBiquad(origem, destino) {
+  destino.type = origem.type;
+  destino.frequency.value = origem.frequency.value;
+  destino.Q.value = origem.Q.value;
+  destino.gain.value = origem.gain.value;
+}
+
+async function renderizarCanal(off, t, amostras) {
+  const buf = await off.decodeAudioData(await (await fetch(t.url)).arrayBuffer());
+
+  const src = off.createBufferSource();
+  src.buffer = buf;
+
+  const trim = off.createGain();
+  trim.gain.value = t.trim.gain.value;
+
+  const hp1 = off.createBiquadFilter();
+  const hp2 = off.createBiquadFilter();
+  copiarBiquad(t.hp1, hp1);
+  copiarBiquad(t.hp2, hp2);
+
+  let gate = null;
+  if (t.gate && workletReady) {
+    gate = new AudioWorkletNode(off, 'gate-processor', { channelCount: 2, channelCountMode: 'explicit' });
+    for (const nome of ['bypass', 'threshold', 'range', 'attack', 'hold', 'release', 'ratio']) {
+      gate.parameters.get(nome).value = t.gate.parameters.get(nome).value;
+    }
+  }
+
+  const eq = t.eq.map((f) => {
+    const n = off.createBiquadFilter();
+    copiarBiquad(f, n);
+    return n;
+  });
+
+  const comp = off.createDynamicsCompressor();
+  for (const nome of ['threshold', 'knee', 'ratio', 'attack', 'release']) {
+    comp[nome].value = t.comp[nome].value;
+  }
+
+  const makeup = off.createGain();
+  makeup.gain.value = t.makeup.gain.value;
+  const fader = off.createGain();
+  fader.gain.value = t.gain.gain.value;      // ja inclui mute e solo
+  const pan = off.createStereoPanner();
+  pan.pan.value = t.pan.pan.value;
+
+  src.connect(trim).connect(hp1).connect(hp2);
+  const entrada = gate ? (hp2.connect(gate), gate) : hp2;
+
+  // Respeita o PRE/POST do compressor, como na cadeia ao vivo.
+  if (t.dynPost) {
+    entrada.connect(eq[0]);
+    eq[0].connect(eq[1]).connect(eq[2]).connect(eq[3]).connect(comp);
+    comp.connect(makeup).connect(fader);
+  } else {
+    entrada.connect(comp);
+    comp.connect(makeup).connect(eq[0]);
+    eq[0].connect(eq[1]).connect(eq[2]).connect(eq[3]).connect(fader);
+  }
+  fader.connect(pan).connect(off.destination);
+
+  src.start();
+  const saida = await off.startRendering();
+  return saida;
+}
+
+async function exportarRapido() {
+  const taxa = ctx.sampleRate;
+  const amostras = Math.ceil(duration * taxa);
+  const soma = [new Float32Array(amostras), new Float32Array(amostras)];
+
+  // Canal calado por mute ou por solo alheio nao precisa ser renderizado.
+  const audiveis = tracks.filter((t) => t.gain.gain.value > 0.00002);
+  let feitos = 0;
+
+  for (const t of audiveis) {
+    if (!exportando) return null;                 // cancelado
+    el('expestado').textContent = `Processando ${t.name} — ${feitos + 1} de ${audiveis.length}`;
+    el('expbarra').style.width = `${(feitos / audiveis.length) * 90}%`;
+
+    const off = new OfflineAudioContext(2, amostras, taxa);
+    if (workletReady) await off.audioWorklet.addModule('gate-processor.js');
+    const saida = await renderizarCanal(off, t, amostras);
+
+    for (let c = 0; c < 2; c++) {
+      const dados = saida.getChannelData(Math.min(c, saida.numberOfChannels - 1));
+      const alvo = soma[c];
+      for (let i = 0; i < dados.length; i++) alvo[i] += dados[i];
+    }
+    feitos++;
+    await new Promise((r) => setTimeout(r, 0));   // deixa a tela respirar
+  }
+
+  // O fader do LR e' um ganho: aplicar no fim da' o mesmo que aplicar durante.
+  const lr = master.gain.value;
+  if (lr !== 1) {
+    for (const canal of soma) for (let i = 0; i < canal.length; i++) canal[i] *= lr;
+  }
+
+  el('expestado').textContent = 'Codificando…';
+  el('expbarra').style.width = '95%';
+  return codificarAac(soma, taxa);
+}
+
+// Codifica em AAC e monta um .m4a. Nao ADTS: quadros ADTS tocam, mas o formato
+// nao guarda duracao, e o player estima pela taxa de bits — uma musica de 90 s
+// aparecia como 224 s, com a barra de tempo errada.
+async function codificarAac(soma, taxa) {
+  const quadros = [];
+  let configAudio = null;
+  const TAXA_BITS = 192000;
+
+  const encoder = new AudioEncoder({
+    output: (chunk, meta) => {
+      // O AudioSpecificConfig vem junto do primeiro quadro e e' o que descreve
+      // o fluxo dentro do recipiente.
+      if (!configAudio && meta && meta.decoderConfig && meta.decoderConfig.description) {
+        configAudio = new Uint8Array(meta.decoderConfig.description);
+      }
+      const b = new Uint8Array(chunk.byteLength);
+      chunk.copyTo(b);
+      quadros.push(b);
+    },
+    error: (e) => console.error('codificador:', e),
+  });
+  encoder.configure({
+    codec: 'mp4a.40.2',
+    sampleRate: taxa,
+    numberOfChannels: 2,
+    bitrate: TAXA_BITS,
+    aac: { format: 'aac' },
+  });
+
+  const BLOCO = 1024 * 16;
+  const intercalado = new Float32Array(BLOCO * 2);
+  for (let inicio = 0; inicio < soma[0].length; inicio += BLOCO) {
+    const n = Math.min(BLOCO, soma[0].length - inicio);
+    for (let i = 0; i < n; i++) {
+      intercalado[i * 2] = soma[0][inicio + i];
+      intercalado[i * 2 + 1] = soma[1][inicio + i];
+    }
+    encoder.encode(new AudioData({
+      format: 'f32',
+      sampleRate: taxa,
+      numberOfFrames: n,
+      numberOfChannels: 2,
+      timestamp: Math.round((inicio / taxa) * 1e6),
+      data: intercalado.slice(0, n * 2),
+    }));
+  }
+  await encoder.flush();
+  encoder.close();
+
+  if (!configAudio) throw new Error('o codificador nao devolveu a descricao do fluxo');
+  return montarM4a(quadros, configAudio, taxa, 2, TAXA_BITS);
+}
 
 function formatoDisponivel() {
   return FORMATOS.find((f) => MediaRecorder.isTypeSupported(f.mime)) || null;
@@ -518,6 +690,41 @@ function nomeDaMix() {
 }
 
 async function exportarMix() {
+  if (!tracks.length || gravador || exportando) return;
+
+  // Caminho rapido, quando o navegador sabe codificar sozinho.
+  if (typeof AudioEncoder !== 'undefined') {
+    exportando = true;
+    el('exportar').classList.add('hidden');
+    el('expcaixa').classList.remove('hidden');
+    el('expestado').textContent = 'Preparando…';
+    try {
+      const t0 = performance.now();
+      const blob = await exportarRapido();
+      if (blob) {
+        baixar(blob, `${nomeDaMix()}.m4a`);
+        console.log(`exportado em ${Math.round((performance.now() - t0) / 1000)} s`);
+      }
+    } catch (err) {
+      console.error('Exportacao rapida falhou, gravando em tempo real:', err);
+      exportando = false;
+      el('expcaixa').classList.add('hidden');
+      el('exportar').classList.remove('hidden');
+      return exportarTempoReal();
+    }
+    exportando = false;
+    el('expcaixa').classList.add('hidden');
+    el('exportar').classList.remove('hidden');
+    el('expbarra').style.width = '0%';
+    return;
+  }
+
+  return exportarTempoReal();
+}
+
+// Reserva: grava a saida enquanto a musica toca. So entra em cena se o
+// navegador nao tiver codificador proprio, ou se o caminho rapido falhar.
+async function exportarTempoReal() {
   if (!tracks.length || gravador) return;
 
   const formato = formatoDisponivel();
@@ -586,7 +793,13 @@ function baixar(blob, nome) {
 el('exportar').addEventListener('click', exportarMix);
 
 el('expcancelar').addEventListener('click', () => {
-  if (!gravador) return;
+  exportando = false;                 // interrompe o caminho rapido
+  if (!gravador) {
+    el('expcaixa').classList.add('hidden');
+    el('exportar').classList.remove('hidden');
+    el('expbarra').style.width = '0%';
+    return;
+  }
   const g = gravador;
   gravador = null;                  // sinaliza o cancelamento para a vigia
   try { g.stop(); } catch (e) { /* ja parado */ }

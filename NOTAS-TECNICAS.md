@@ -231,22 +231,43 @@ macOS a pasta do app fica dentro do `.app`, que é só leitura.
 O carregamento automático acontece **uma vez**, quando a página abre. Recarregar
 por baixo de alguém que está no meio de uma aula seria pior que não lembrar.
 
-### A exportação tem de ser em tempo real
+### A exportação é acelerada, canal por canal
 
-Um `OfflineAudioContext` renderizaria em segundos, mas **não aceita
-`MediaElementAudioSourceNode`** — e a alternativa, `decodeAudioData` em todos os
-stems, precisa deles inteiros na memória ao mesmo tempo: ~4,3 GB numa música de
-12 minutos com 17 faixas.
+O gargalo nunca foi o processamento: era o **codificador**, que grava em tempo
+real. Com `AudioEncoder` (WebCodecs) a codificação deixa de ser o limite.
 
-Render por pedaços também não resolve: gate, compressor e filtros são
-estados que reiniciariam a cada emenda, e áudio comprimido não se decodifica por
-intervalo de bytes.
+E o processamento vai para `OfflineAudioContext`, que roda cerca de **200× mais
+rápido** que tempo real. Não dá para renderizar tudo de uma vez — 17 stems de 12
+minutos decodificados juntos são ~4,3 GB. Mas **cada canal é independente até a
+soma**, então renderiza-se um de cada vez, acumulando. O pico de memória cai para
+uns 750 MB.
 
-Então é captura ao vivo: `createMediaStreamDestination()` pendurado no master e
-um `MediaRecorder`. Grava exatamente o que sai, com toda a mixagem aplicada.
+Somar depois dá o mesmo resultado que somar durante: as cadeias de canal não
+interagem, e o fader do LR é só um ganho no fim. Canal mudo ou calado pelo solo
+nem é renderizado.
 
-Formato: `audio/mp4;codecs=mp4a.40.2` quando disponível — abre em qualquer lugar
-e fica pequeno. `webm/opus` como reserva.
+Medido: 90 s de música com 6 canais em **3,3 s** — 27× mais rápido.
+
+### O recipiente precisa ser .m4a, não ADTS
+
+O codificador entrega quadros AAC. Concatenar quadros ADTS dá um arquivo que
+toca, e é muito mais simples — mas **ADTS não guarda a duração**, e o player
+estima pela taxa de bits. Uma música de 90 s aparecia como 224 s no macOS, com a
+barra de tempo toda errada.
+
+Então `public/m4a.js` monta o recipiente: `ftyp`, `moov` e `mdat`. O
+`AudioSpecificConfig` que vai no `esds` vem do próprio codificador, no campo
+`decoderConfig.description` do primeiro quadro — não se inventa.
+
+Conferido com as ferramentas do macOS: `File type ID: m4af`, duração 90,03 s, e
+o `afconvert` converte o arquivo inteiro sem reclamar, o que só acontece se a
+estrutura estiver correta.
+
+### A reserva em tempo real
+
+Sem `AudioEncoder`, o app grava a saída ao vivo:
+`createMediaStreamDestination()` pendurado no master e um `MediaRecorder`. Aí a
+música toca inteira e a exportação demora o que ela dura.
 
 **O estrangulamento de janela em segundo plano é um risco real aqui.** A correção
 de deriva entre as faixas roda por temporizador; se o sistema reduzir a

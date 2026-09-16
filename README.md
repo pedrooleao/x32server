@@ -105,15 +105,17 @@ qualquer lugar e é pequeno — cerca de 14 MB numa música de 12 minutos.
 O arquivo é exatamente o que se ouve: fader, mute, solo, pan, ganho, EQ, gate e
 compressor, tudo como foi deixado na mesa.
 
-**A gravação é em tempo real: uma música de 12 minutos leva 12 minutos.** Não é
-limitação de preguiça — renderizar acelerado exigiria ter os stems inteiros
-decodificados na memória ao mesmo tempo, uns 4 GB, que é justamente o que o
-player evita ao ler por streaming. A tela mostra o quanto falta, e dá para
-cancelar no meio.
+**É bem mais rápido que a música.** Uma música de 90 segundos exporta em cerca
+de 3 — o app processa cada canal acelerado, em vez de esperar a música tocar.
+Canais mudos ou calados pelo solo são pulados, então quanto mais enxuta a
+mixagem, mais rápido.
 
-Durante a exportação, deixe a janela na frente. O sistema reduz a prioridade de
-janelas de fundo, e isso pode desalinhar as faixas no meio da gravação. No app
-empacotado isso já vem desligado; no navegador comum, não.
+A tela mostra o progresso e dá para cancelar.
+
+Em navegador antigo, sem codificador próprio, o app cai para a gravação em tempo
+real — aí a música toca inteira e você precisa esperar. Nesse caso, deixe a
+janela na frente: o sistema reduz a prioridade de janelas de fundo e isso pode
+desalinhar as faixas no meio da gravação.
 
 ## Quatro coisas que surpreendem
 
