@@ -459,28 +459,50 @@ el('picker').addEventListener('change', async (ev) => {
   duration = 0;
   const falhas = [];
 
-  for (const file of files) {
-    const audio = new Audio();
-    // Guardamos a URL para poder revogar depois: sao dezenas de MB por faixa, e
-    // sem revogar elas ficam presas na memoria ao trocar de musica.
-    const url = URL.createObjectURL(file);
-    audio.src = url;
-    audio.preload = 'auto';
-    audio.crossOrigin = 'anonymous';
+  // ABRE TODOS OS ARQUIVOS DE UMA VEZ.
+  //
+  // Antes era um de cada vez, cada um esperando o anterior terminar. Com 17
+  // stems isso somava a espera de 17 aberturas em fila — e como a tela so
+  // avancava quando um arquivo dava certo, uma sequencia de falhas parecia
+  // travamento. Abrindo em paralelo, o tempo total vira o do arquivo mais lento.
+  //
+  // A ordem dos canais nao depende da ordem de chegada: o Promise.all devolve
+  // na ordem em que foi pedido, que e' a alfabetica.
+  let prontos = 0;
+  const abertos = await Promise.all(
+    files.map(async (file) => {
+      const audio = new Audio();
+      // Guardamos a URL para poder revogar depois: sao dezenas de MB por faixa,
+      // e sem revogar elas ficam presas na memoria ao trocar de musica.
+      const url = URL.createObjectURL(file);
+      audio.src = url;
+      audio.preload = 'auto';
+      audio.crossOrigin = 'anonymous';
 
-    try {
-      await new Promise((resolve, reject) => {
-        audio.addEventListener('loadedmetadata', resolve, { once: true });
-        audio.addEventListener('error', () => reject(audio.error), { once: true });
-        setTimeout(() => reject(new Error('tempo esgotado')), 15000);
-      });
-    } catch (err) {
+      try {
+        await new Promise((resolve, reject) => {
+          audio.addEventListener('loadedmetadata', resolve, { once: true });
+          audio.addEventListener('error', () => reject(audio.error), { once: true });
+          setTimeout(() => reject(new Error('tempo esgotado')), 15000);
+        });
+      } catch (err) {
+        URL.revokeObjectURL(url);
+        console.error('Não abriu', file.name, err);
+        return { file, erro: true };
+      }
+
+      prontos++;
+      setLoaderText(`Abrindo ${prontos} de ${files.length}…`);
+      return { file, audio, url };
+    })
+  );
+
+  setLoaderText(`Montando os canais…`);
+
+  for (const aberto of abertos) {
+    const { file, audio, url } = aberto;
+    if (aberto.erro) {
       falhas.push(file.name);
-      URL.revokeObjectURL(url);
-      console.error('Não abriu', file.name, err);
-      // Sem isto a tela fica parada no aviso inicial enquanto os arquivos falham
-      // um a um, e parece travamento.
-      setLoaderText(`${tracks.length} de ${files.length} — não abriu: ${file.name}`);
       continue;
     }
 
@@ -559,7 +581,7 @@ el('picker').addEventListener('change', async (ev) => {
     religarDinamica(faixa, 0);
 
     duration = Math.max(duration, audio.duration || 0);
-    setLoaderText(`Preparando ${tracks.length} de ${files.length}…`);
+    setLoaderText(`Montando canal ${tracks.length} de ${files.length}…`);
   }
 
   if (tracks.length === 0) {

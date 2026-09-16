@@ -173,6 +173,37 @@ Reordenar a cadeia exige desconectar e reconectar os nós. **O medidor pré-fade
 sai de quem fecha o processamento**, que muda junto: `makeup` em POST, `eq[3]`
 em PRE.
 
+### O worklet do gate sai curto quando está desligado
+
+Ele roda em **todos** os canais o tempo todo, e o gate costuma estar desligado
+na maioria. Antes o envelope e o `log10` eram calculados por amostra mesmo
+assim, e o resultado descartado no fim.
+
+A Web Audio entrega o array do parâmetro com **um elemento** quando ele não muda
+dentro do bloco — que é o caso de um botão que ninguém tocou. Dá para detectar
+isso e copiar a entrada direto para a saída.
+
+Medido com 32 gates processando 10 s, em render offline (onde o tempo é
+proporcional ao custo):
+
+| | Antes | Agora |
+|---|---|---|
+| 32 gates desligados | 1126 ms | **281 ms** |
+
+O caminho ligado também ficou mais barato: a decisão aberto/fechado é feita em
+escala **linear**, comparando o envelope com o threshold convertido uma vez por
+bloco. O `log10` só aparece no ramo do expansor, onde é inevitável.
+
+### Abrir os arquivos em paralelo, não em fila
+
+`Promise.all` sobre os arquivos em vez de `for...await`. O `Promise.all`
+devolve na ordem em que foi pedido, então a ordem alfabética dos canais não
+depende de qual arquivo abriu primeiro.
+
+Medido com 20 arquivos: **52 ms em fila contra 19 ms em paralelo**. Com arquivos
+grandes no disco a diferença é maior, porque as esperas de leitura passam a se
+sobrepor.
+
 ### Streaming, não `decodeAudioData`
 
 17 stems de 12 minutos descompactados dão ~4,5 GB de RAM e matam a aba. Cada
