@@ -11,6 +11,9 @@ class GateProcessor extends AudioWorkletProcessor {
       { name: 'attack', defaultValue: 0.001, minValue: 0, maxValue: 0.12 },   // s
       { name: 'hold', defaultValue: 0.2, minValue: 0, maxValue: 2 },          // s
       { name: 'release', defaultValue: 0.25, minValue: 0.005, maxValue: 4 },  // s
+      // 1 = GATE (fecha ate o range). 2, 3, 4 = EXP2/EXP3/EXP4, que nao fecham:
+      // atenuam proporcionalmente a quanto o sinal esta abaixo do threshold.
+      { name: 'ratio', defaultValue: 1, minValue: 1, maxValue: 4 },
     ];
   }
 
@@ -49,8 +52,23 @@ class GateProcessor extends AudioWorkletProcessor {
       if (open) this.holdLeft = p('hold', i);
       else if (this.holdLeft > 0) this.holdLeft -= dt;
 
-      const floor = Math.pow(10, -p('range', i) / 20);
-      const target = open || this.holdLeft > 0 ? 1 : floor;
+      const range = p('range', i);
+      let target;
+      if (open || this.holdLeft > 0) {
+        target = 1;
+      } else {
+        const ratio = p('ratio', i);
+        if (ratio <= 1) {
+          target = Math.pow(10, -range / 20);          // GATE: corta no range
+        } else {
+          // Expansor: cada dB abaixo do threshold vira (ratio-1) dB de
+          // atenuacao, ate o limite do range. E' a diferenca audivel para o
+          // gate — a cauda some aos poucos em vez de ser cortada.
+          const abaixo = p('threshold', i) - db;
+          const atenua = Math.min(range, Math.max(0, abaixo * (ratio - 1)));
+          target = Math.pow(10, -atenua / 20);
+        }
+      }
 
       // Sobe no attack, desce no release
       const tau = target > this.gainNow ? Math.max(p('attack', i), 0.0002) : p('release', i);

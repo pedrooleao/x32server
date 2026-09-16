@@ -47,7 +47,12 @@ function normQ(n) {
 // Tabela de ratio do X32 (dyn/ratio e' um indice, nao um float).
 const RATIOS = [1.1, 1.3, 1.5, 2, 2.5, 3, 4, 5, 7, 10, 20, 100];
 const EQ_TYPES = ['LCut', 'LShv', 'PEQ', 'VEQ', 'HShv', 'HCut'];
-const GATE_MODES = ['GATE', 'EXP2', 'EXP3', 'EXP4', 'DUCK'];
+// A ordem importa: e' o indice que vai no OSC. Estava ['GATE', 'EXP2', ...],
+// entao o modo 0 virava GATE quando na X32 o 0 e' EXP2 — o tablet mostrava um
+// modo e a mesa entendia outro.
+const GATE_MODES = ['EXP2', 'EXP3', 'EXP4', 'GATE', 'DUCK'];
+const GATE_GATE = 3;   // indice do GATE de verdade
+const GATE_DUCK = 4;
 
 // O Mixing Station varre o mapa inteiro de um X32 no sync inicial e desconecta
 // se algum endereco ficar mudo. Como e' inviavel modelar os ~4000 parametros da
@@ -125,6 +130,11 @@ class MixerState {
         // controla o audio, e o endereco (/ch/NN/preamp/trim) ja traz o numero
         // do canal — nao depende do mapa de preamps que o app nao monta.
         trim: 0.5,
+        // Low Cut do preamp — o botao "Lowcut" da tela do canal. E' separado do
+        // EQ e vem antes dele na cadeia. Inclinacao selecionavel na X32.
+        hpon: 0,                 // 0 = desligado
+        hpslope: 1,              // 0=12, 1=18, 2=24 dB/oitava
+        hpf: freqNorm(100),      // 20 a 400 Hz
         // Qual entrada fisica alimenta o canal. 0 = nenhuma, 1..32 = Local In.
         // O Mixing Station usa isto para descobrir de qual preamp e' o botao de
         // ganho do canal: com 0 em todos, o botao nao tinha em que mexer.
@@ -148,7 +158,7 @@ class MixerState {
         },
         gate: {
           on: 0,
-          mode: 0,          // 0=GATE
+          mode: GATE_GATE,  // 3 = GATE, o padrao sensato para um canal
           thr: 0.5,         // -40 dB
           range: 0.75,      // ~46 dB
           attack: 0.0,      // 0 ms
@@ -233,6 +243,15 @@ class MixerState {
           return { type: 'i', value: ch.source };
         // Dois parametros distintos na X32, com faixas distintas. Estavam
         // caindo no mesmo campo.
+        case 'preamp/hpon':
+          if (write) ch.hpon = newValue ? 1 : 0;
+          return { type: 'i', value: ch.hpon };
+        case 'preamp/hpslope':
+          if (write) ch.hpslope = newValue | 0;
+          return { type: 'i', value: ch.hpslope };
+        case 'preamp/hpf':
+          if (write) ch.hpf = clamp01(newValue);
+          return { type: 'f', value: ch.hpf };
         case 'preamp/trim':
           if (write) ch.trim = clamp01(newValue);
           return { type: 'f', value: ch.trim };
@@ -564,6 +583,7 @@ class MixerState {
         gain: faderToGain(c.fader),   // ganho do fader, ja convertido
         trim: c.trim,                 // trim digital, 0..1 = -18 a +18 dB
         ha: c.gain,                   // ganho de preamp, 0..1 = -12 a +60 dB
+        hp: { on: c.hpon, slope: c.hpslope, f: c.hpf },
         eq: c.eq,
         gate: c.gate,
         dyn: c.dyn,

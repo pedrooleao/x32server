@@ -142,6 +142,37 @@ provavelmente apareceria ali como aparece no bus.
 Enquanto não for medido contra uma X32 de verdade, não afirme nem que bate nem
 que difere.
 
+### O enum dos modos de gate não começa no GATE
+
+`{EXP2, EXP3, EXP4, GATE, DUCK}` — **GATE é o índice 3**. A tabela daqui estava
+`['GATE', 'EXP2', ...]` e o padrão era `mode: 0`, então a mesa nascia em EXP2
+achando que era GATE, e o tablet mostrava um modo enquanto a mesa entendia outro.
+
+O modo também era ignorado no áudio: tudo virava gate duro. Hoje o worklet
+recebe um `ratio` — 1 fecha até o range (GATE), 2/3/4 atenuam
+`(threshold - nível) × (ratio - 1)`, que é a diferença audível: a cauda some aos
+poucos em vez de ser cortada.
+
+**Ao medir, lembre que o detector é de pico.** Uma senoide de -30 dBFS RMS tem
+pico em -27, então com threshold em -20 ela está 7 dB abaixo, não 10.
+
+### A dinâmica pode vir antes ou depois do EQ
+
+`/ch/NN/dyn/pos` é `{PRE, POST}` e o padrão é **PRE**. A mesa declarava PRE e o
+áudio sempre fazia POST.
+
+Muda bastante o som. Com +15 dB de EQ em 1 kHz e o compressor em -30 dB, 10:1,
+medido no mesmo tom:
+
+| | Compressor vê | Redução | Saída |
+|---|---|---|---|
+| PRE | -30 dBFS | 1 dB | -16,0 |
+| POST | -15 dBFS | 13,7 dB | -28,6 |
+
+Reordenar a cadeia exige desconectar e reconectar os nós. **O medidor pré-fader
+sai de quem fecha o processamento**, que muda junto: `makeup` em POST, `eq[3]`
+em PRE.
+
 ### Streaming, não `decodeAudioData`
 
 17 stems de 12 minutos descompactados dão ~4,5 GB de RAM e matam a aba. Cada

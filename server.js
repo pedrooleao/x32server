@@ -349,7 +349,12 @@ function pushToBrowser(address, written) {
         : null;
   if (num) {
     const c = state.channel(num);
-    if (c) channel = { num, eq: c.eq, gate: c.gate, dyn: c.dyn, trim: c.trim, ha: c.gain };
+    if (c) {
+      channel = {
+        num, eq: c.eq, gate: c.gate, dyn: c.dyn, trim: c.trim, ha: c.gain,
+        hp: { on: c.hpon, slope: c.hpslope, f: c.hpf },
+      };
+    }
   }
 
   // O solo muda quem se ouve em TODOS os canais, nao so no que foi tocado:

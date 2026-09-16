@@ -77,6 +77,8 @@ function handleParam({ address, value, gain, channel: msgState, solos }) {
       t.pan.pan.setTargetAtTime((value - 0.5) * 2, ctx.currentTime, 0.02);
     } else if (key === 'preamp/trim') {
       applyTrim(t, msgState && msgState.ha, value);
+    } else if (key.startsWith('preamp/hp')) {
+      if (msgState) applyHp(t, msgState.hp);
     } else if (msgState) {
       if (key.startsWith('eq')) applyEqAll(t, msgState.eq);
       if (key.startsWith('gate')) applyGate(t, msgState.gate);
@@ -102,6 +104,7 @@ function applyChannel(i, c) {
   t.solo = c.solo || 0;
   rampGain(t);
   applyTrim(t, c.ha, c.trim);
+  applyHp(t, c.hp);
   if (c.eq) applyEqAll(t, c.eq);
   if (c.gate) applyGate(t, c.gate);
   if (c.dyn) applyDyn(t, c.dyn);
@@ -226,11 +229,52 @@ function applyTrim(t, ha, trim) {
   t.trim.gain.setTargetAtTime(Math.pow(10, (dbHa + dbTrim) / 20), ctx.currentTime, 0.02);
 }
 
+// Modos da secao de gate na X32, na ordem do OSC:
+//   0 EXP2   1 EXP3   2 EXP4   3 GATE   4 DUCK
+// O ratio do expansor e' 2, 3 ou 4; o GATE fecha ate o range. O DUCK precisa de
+// uma fonte externa para abaixar o canal (locucao sobre musica) e nao e'
+// emulado: com ele ligado, o canal passa limpo.
+const GATE_RATIO = [2, 3, 4, 1, 0];
+
+// Low Cut do preamp. Vem depois do ganho e ANTES do gate, como na X32 — e' o
+// que faz o gate parar de disparar com pisada de palco e ronco de microfone.
+//
+// A X32 oferece 12, 18 e 24 dB/oitava. Com dois biquads da' para fazer 12 (uma
+// secao Butterworth) e 24 (duas secoes, Q 0.5412 e 1.3066) exatos. O 18 e'
+// ordem impar e nao sai de biquads: fica igual ao 24, mais ingreme que na mesa.
+// Em dB, que e' como a Web Audio le o Q nos filtros de corte.
+const HP_Q1 = [-3.0103, -5.3298, -5.3298];   // 12, 18, 24
+const HP_Q2 = [null, 2.3227, 2.3227];
+const HP_FREQ_MIN = 20;
+const HP_FREQ_MAX = 400;
+
+function applyHp(t, hp) {
+  if (!t.hp1) return;
+  const now = ctx.currentTime;
+  const ligado = hp && hp.on === 1;
+  const slope = Math.min(2, Math.max(0, (hp && hp.slope) | 0));
+  // A faixa do Low Cut e' 20 a 400 Hz, nao os 20 Hz a 20 kHz do EQ.
+  const hz = HP_FREQ_MIN * Math.pow(HP_FREQ_MAX / HP_FREQ_MIN, hp ? hp.f : 0);
+
+  // Desligado, o par vira peaking com ganho 0: transparente, sem reconectar.
+  t.hp1.type = ligado ? 'highpass' : 'peaking';
+  t.hp2.type = ligado && HP_Q2[slope] !== null ? 'highpass' : 'peaking';
+  t.hp1.gain.setTargetAtTime(0, now, 0.02);
+  t.hp2.gain.setTargetAtTime(0, now, 0.02);
+  t.hp1.frequency.setTargetAtTime(hz, now, 0.02);
+  t.hp2.frequency.setTargetAtTime(hz, now, 0.02);
+  t.hp1.Q.setTargetAtTime(ligado ? HP_Q1[slope] : 0, now, 0.02);
+  t.hp2.Q.setTargetAtTime(ligado && HP_Q2[slope] !== null ? HP_Q2[slope] : 0, now, 0.02);
+}
+
 function applyGate(t, g) {
   if (!t.gate) return;   // sem AudioWorklet o canal passa limpo
   const p = t.gate.parameters;
   const now = ctx.currentTime;
-  p.get('bypass').setValueAtTime(g.on ? 0 : 1, now);
+  const ratio = GATE_RATIO[g.mode] !== undefined ? GATE_RATIO[g.mode] : 1;
+  // ratio 0 = DUCK, que nao emulamos: passa limpo.
+  p.get('bypass').setValueAtTime(g.on && ratio > 0 ? 0 : 1, now);
+  p.get('ratio').setValueAtTime(Math.max(1, ratio), now);
   p.get('threshold').setTargetAtTime(normGateThr(g.thr), now, 0.02);
   p.get('range').setTargetAtTime(normRange(g.range), now, 0.02);
   p.get('attack').setTargetAtTime(Math.max(0.0002, normMs(g.attack)), now, 0.02);
@@ -280,7 +324,40 @@ async function ganhoAutomaticoDoComp(threshold, knee, ratio) {
   return ganho;
 }
 
+// Posicao da dinamica em relacao ao EQ. Na X32 e' escolha do operador
+// (/ch/NN/dyn/pos: PRE ou POST) e muda o som: comprimir antes do EQ significa
+// que o compressor nao "ouve" o que o EQ fez; depois, ele reage ao grave que
+// voce acabou de levantar.
+//
+// A mesa declarava PRE e o audio sempre fazia POST.
+function religarDinamica(t, pos) {
+  const post = pos === 1;
+  if (t.dynPost === post) return;
+  t.dynPost = post;
+
+  const entrada = t.gate || t.hp2;   // quem alimenta o bloco de processamento
+  for (const no of [entrada, t.eq[3], t.makeup]) {
+    try { no.disconnect(); } catch (e) { /* ainda nao ligado */ }
+  }
+
+  // O medidor e' pre-fader: sai de quem fecha o processamento, que muda junto.
+  try { t.analyser.disconnect(); } catch (e) { /* nada ligado nele */ }
+
+  if (post) {
+    entrada.connect(t.eq[0]);
+    t.eq[3].connect(t.comp);
+    t.makeup.connect(t.gain);
+    t.makeup.connect(t.analyser);
+  } else {
+    entrada.connect(t.comp);
+    t.makeup.connect(t.eq[0]);
+    t.eq[3].connect(t.gain);
+    t.eq[3].connect(t.analyser);
+  }
+}
+
 function applyDyn(t, d) {
+  religarDinamica(t, d.pos);
   const now = ctx.currentTime;
   const on = d.on === 1 && d.mode === 0;
   const thr = on ? normDynThr(d.thr) : 0;
@@ -321,7 +398,7 @@ function applyDyn(t, d) {
 function limparFaixas() {
   for (const t of tracks) {
     try { t.audio.pause(); } catch (e) { /* elemento ja descartado */ }
-    for (const no of [t.src, t.trim, t.gate, ...t.eq, t.comp, t.makeup, t.gain, t.pan, t.analyser]) {
+    for (const no of [t.src, t.trim, t.hp1, t.hp2, t.gate, ...t.eq, t.comp, t.makeup, t.gain, t.pan, t.analyser]) {
       if (no) { try { no.disconnect(); } catch (e) { /* ja desconectado */ } }
     }
     t.audio.removeAttribute('src');
@@ -426,31 +503,40 @@ el('picker').addEventListener('change', async (ev) => {
     comp.knee.value = 0;
 
     const trim = ctx.createGain();   // ganho de entrada, antes do gate
+    const hp1 = ctx.createBiquadFilter();
+    const hp2 = ctx.createBiquadFilter();
+    for (const f of [hp1, hp2]) { f.type = 'peaking'; f.gain.value = 0; }
     const makeup = ctx.createGain();
     const gain = ctx.createGain();
     const pan = ctx.createStereoPanner();
     const analyser = ctx.createAnalyser();
     analyser.fftSize = 512;
 
-    src.connect(trim);
-    if (gate) trim.connect(gate).connect(eq[0]);
-    else trim.connect(eq[0]);
+    src.connect(trim).connect(hp1).connect(hp2);
+    if (gate) hp2.connect(gate).connect(eq[0]);
+    else hp2.connect(eq[0]);
     eq[0].connect(eq[1]).connect(eq[2]).connect(eq[3]);
-    eq[3].connect(comp).connect(makeup).connect(gain).connect(pan).connect(master);
+    comp.connect(makeup);
+    gain.connect(pan).connect(master);
+    // A ligacao entre gate, EQ e compressor depende do PRE/POST e e' feita por
+    // religarDinamica, chamada logo abaixo com o estado da mesa.
 
     // Medidor PRE-FADER, como na X32: sai depois do ganho, gate, EQ e comp, mas
     // antes do fader e do mute. E' o que deixa ajustar ganho pelo medidor com o
     // fader onde estiver. Saindo de `gain` (o fader), o medidor seguia o fader e
     // dava a impressao de que o fader era o botao de ganho.
-    makeup.connect(analyser);
+    // Quem alimenta o medidor muda com o PRE/POST, entao quem liga e'
+    // religarDinamica.
     gain.gain.value = faderToGain(0.75);
 
-    tracks.push({
+    const faixa = {
       name: file.name.replace(/\.[^.]+$/, '').slice(0, 12),
       audio,
       url,
       src,
       trim,
+      hp1,
+      hp2,
       gate,
       eq,
       comp,
@@ -461,11 +547,16 @@ el('picker').addEventListener('change', async (ev) => {
       data: new Float32Array(analyser.fftSize),
       on: 1,
       solo: 0,
+      dynPost: null,   // ainda nao ligado: religarDinamica monta a cadeia
       fader: 0.75,
       dynSeq: 0,
       eqTypes: [1, 2, 2, 4],
       eqOn: 1,
-    });
+    };
+    tracks.push(faixa);
+    // Monta a cadeia. PRE e' o padrao que a mesa declara; o snapshot que chega
+    // logo depois religa se a mesa estiver em POST.
+    religarDinamica(faixa, 0);
 
     duration = Math.max(duration, audio.duration || 0);
     setLoaderText(`Preparando ${tracks.length} de ${files.length}…`);

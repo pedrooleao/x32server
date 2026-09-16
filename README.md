@@ -71,8 +71,9 @@ de 12 minutos com 17 stems funciona sem estourar a RAM.
 | Ganho de preamp | ok — -12 a +60 dB |
 | Trim de entrada | ok — -18 a +18 dB |
 | EQ de 4 bandas | ok — LCut, LShv, PEQ, HShv, HCut |
-| Gate | ok — threshold, range, attack, hold, release |
-| Compressor | ok — threshold, ratio, knee, attack, release, makeup |
+| Low Cut do preamp | ok — 20 a 400 Hz, 12/18/24 dB/oitava |
+| Gate | ok — GATE e EXP2/EXP3/EXP4, com threshold, range, attack, hold, release |
+| Compressor | ok — threshold, ratio, knee, attack, release, makeup, PRE/POST EQ |
 | Medidores | ok — pré-fader, como na X32 |
 | Nome e cor do canal | ok |
 | Transporte | play, pause, stop, ±10s, seek na barra, teclado |
@@ -160,10 +161,13 @@ verdade tudo abaixo funciona.
 
 **Controles que não mexem no áudio:**
 
-- **Low Cut do preamp** (o botão "Lowcut" na tela do canal) — guarda o valor,
-  não filtra nada. Para cortar grave, use uma banda do EQ como LCut.
 - **Modo EXP da dinâmica** — a X32 tem COMP e EXP; com EXP ligado, aqui o canal
-  passa limpo. Só COMP processa.
+  passa limpo. Só COMP processa. (O **gate** tem os modos EXP2/3/4 funcionando;
+  o que falta é o EXP do *compressor*, que é outra seção.)
+- **Modo DUCK do gate** — precisa de uma fonte externa para abaixar o canal, e
+  não há roteamento de sidechain.
+- **Mix da dinâmica** (compressão paralela) — sempre 100% processado.
+- **Filtro de sidechain** do gate e do compressor.
 - **Envios para bus e mix de monitor** — guardam o valor, não roteiam áudio.
 - **Cenas e snapshots.**
 
@@ -173,6 +177,10 @@ verdade tudo abaixo funciona.
   com resposta diferente de um PEQ limpo.
 - **Ratio 100:1** é limitado a 20:1 — é o teto do compressor da Web Audio. Na
   X32 o 100:1 é praticamente um limiter.
+- **Low Cut de 18 dB/oitava** sai como 24. Ordem ímpar não se faz com os
+  filtros da Web Audio; 12 e 24 são exatos.
+- **Q das bandas de prateleira** (LShv/HShv) é ignorado: a Web Audio não deixa
+  ajustar a inclinação da prateleira.
 
 **Do sistema:**
 
