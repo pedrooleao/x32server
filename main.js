@@ -98,6 +98,10 @@ function abrirJanela(info) {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      // O Chromium estrangula temporizadores em janela de fundo. Aqui isso
+      // desalinharia as faixas: a correcao de deriva roda por temporizador, e
+      // uma exportacao de 12 minutos com a janela atras de outra sairia torta.
+      backgroundThrottling: false,
     },
   });
 
@@ -108,6 +112,18 @@ function abrirJanela(info) {
   janela.loadURL(info.url);
 
   janela.once('ready-to-show', () => janela.show());
+
+  // Onde salvar a mixagem exportada. Sem isto o Electron salva direto na pasta
+  // de downloads, sem perguntar — e o aluno nao acha o arquivo depois.
+  janela.webContents.session.on('will-download', (evento, item) => {
+    const caminho = dialog.showSaveDialogSync(janela, {
+      title: 'Salvar a mixagem',
+      defaultPath: path.join(app.getPath('music'), item.getFilename()),
+      buttonLabel: 'Salvar',
+    });
+    if (caminho) item.setSavePath(caminho);
+    else item.cancel();
+  });
 
   // Links externos vao para o navegador do sistema, nao viram outra janela.
   janela.webContents.setWindowOpenHandler(({ url }) => {

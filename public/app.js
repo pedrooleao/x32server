@@ -17,6 +17,11 @@ const CLIPE_NIVEL = 0.99;
 const CLIPE_SEGURA = 1500;   // ms
 let clipeMasterAte = 0;
 
+// Saida paralela para gravar a mixagem. Fica pendurada no master, entao grava
+// exatamente o que se ouve — com fader, mute, solo, EQ, gate e compressor.
+const gravacao = ctx.createMediaStreamDestination();
+master.connect(gravacao);
+
 const sondaMaster = ctx.createAnalyser();
 sondaMaster.fftSize = 1024;
 master.connect(sondaMaster);
@@ -483,6 +488,113 @@ function carregarPastaLembrada() {
     }))
   );
 }
+
+// ---------------------------------------------------------------------------
+// Exportar a mixagem
+//
+// E' captura em TEMPO REAL, nao renderizacao acelerada. Para renderizar rapido
+// seria preciso ter os stems inteiros decodificados na memoria ao mesmo tempo —
+// cerca de 4 GB numa musica de 12 minutos — e um OfflineAudioContext nem aceita
+// MediaElementSource. Entao a musica toca uma vez, do inicio ao fim, e o que sai
+// no master e' gravado.
+// ---------------------------------------------------------------------------
+const FORMATOS = [
+  { mime: 'audio/mp4;codecs=mp4a.40.2', ext: 'm4a' },   // abre em qualquer lugar
+  { mime: 'audio/webm;codecs=opus', ext: 'webm' },
+  { mime: 'audio/webm', ext: 'webm' },
+];
+
+let gravador = null;
+
+function formatoDisponivel() {
+  return FORMATOS.find((f) => MediaRecorder.isTypeSupported(f.mime)) || null;
+}
+
+function nomeDaMix() {
+  const base = pastaLembrada && pastaLembrada.nome ? pastaLembrada.nome : 'mixagem';
+  const d = new Date();
+  const carimbo = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return `${base} — mix ${carimbo}`.replace(/[\\/:*?"<>|]/g, '-');
+}
+
+async function exportarMix() {
+  if (!tracks.length || gravador) return;
+
+  const formato = formatoDisponivel();
+  if (!formato) {
+    el('expestado').textContent = 'Este navegador não sabe gravar áudio.';
+    return;
+  }
+
+  const pedacos = [];
+  gravador = new MediaRecorder(gravacao.stream, {
+    mimeType: formato.mime,
+    audioBitsPerSecond: 256000,
+  });
+  gravador.ondataavailable = (e) => { if (e.data.size) pedacos.push(e.data); };
+
+  const terminou = new Promise((r) => { gravador.onstop = r; });
+
+  el('exportar').classList.add('hidden');
+  el('expcaixa').classList.remove('hidden');
+  el('expestado').textContent = 'Preparando…';
+
+  seek(0);
+  await play();
+  gravador.start(1000);
+
+  // Acompanha ate o fim da musica. Nao da para confiar so no evento 'ended':
+  // sao 17 elementos e o primeiro a acabar nao e' necessariamente o relogio.
+  await new Promise((resolve) => {
+    const vigia = setInterval(() => {
+      if (!gravador) { clearInterval(vigia); resolve(); return; }
+      const pos = leader ? leader.currentTime : 0;
+      const falta = Math.max(0, duration - pos);
+      el('expbarra').style.width = `${Math.min(100, (pos / duration) * 100)}%`;
+      el('expestado').textContent =
+        `Gravando em tempo real — ${fmt(pos)} de ${fmt(duration)}, faltam ${fmt(falta)}`;
+      if (pos >= duration - 0.15 || !playing()) { clearInterval(vigia); resolve(); }
+    }, 250);
+  });
+
+  if (!gravador) return;            // cancelado no meio
+  gravador.stop();
+  await terminou;
+  gravador = null;
+  pause();
+
+  el('expestado').textContent = 'Salvando…';
+  const blob = new Blob(pedacos, { type: formato.mime });
+  baixar(blob, `${nomeDaMix()}.${formato.ext}`);
+
+  el('expcaixa').classList.add('hidden');
+  el('exportar').classList.remove('hidden');
+  el('expbarra').style.width = '0%';
+}
+
+function baixar(blob, nome) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = nome;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
+el('exportar').addEventListener('click', exportarMix);
+
+el('expcancelar').addEventListener('click', () => {
+  if (!gravador) return;
+  const g = gravador;
+  gravador = null;                  // sinaliza o cancelamento para a vigia
+  try { g.stop(); } catch (e) { /* ja parado */ }
+  pause();
+  el('expcaixa').classList.add('hidden');
+  el('exportar').classList.remove('hidden');
+  el('expbarra').style.width = '0%';
+});
 
 el('btpasta').addEventListener('click', () => {
   if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'escolherPasta' }));

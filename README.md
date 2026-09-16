@@ -84,6 +84,7 @@ de 12 minutos com 17 stems funciona sem estourar a RAM.
 | Compressor | ok — threshold, ratio, knee, attack, release, makeup, PRE/POST EQ |
 | Medidores | ok — pré-fader e de pico, como na X32 |
 | Luz de clipe | ok — por canal e na saída principal |
+| Exportar a mixagem | ok — grava em tempo real, sai um `.m4a` |
 | Nome e cor do canal | ok |
 | Transporte | play, pause, stop, ±10s, seek na barra, teclado |
 | Envios para bus / mix de monitor | guarda o valor, não roteia áudio |
@@ -94,6 +95,25 @@ Cada canal roda a cadeia na mesma ordem da mesa real:
 ```
 stem → ganho → gate → EQ → compressor → fader → pan → LR
 ```
+
+## Exportar a mixagem do aluno
+
+Depois de ajustar tudo no Mixing Station, **Exportar mix** grava o resultado num
+arquivo que o aluno pode mandar para você corrigir. Sai um `.m4a`, que abre em
+qualquer lugar e é pequeno — cerca de 14 MB numa música de 12 minutos.
+
+O arquivo é exatamente o que se ouve: fader, mute, solo, pan, ganho, EQ, gate e
+compressor, tudo como foi deixado na mesa.
+
+**A gravação é em tempo real: uma música de 12 minutos leva 12 minutos.** Não é
+limitação de preguiça — renderizar acelerado exigiria ter os stems inteiros
+decodificados na memória ao mesmo tempo, uns 4 GB, que é justamente o que o
+player evita ao ler por streaming. A tela mostra o quanto falta, e dá para
+cancelar no meio.
+
+Durante a exportação, deixe a janela na frente. O sistema reduz a prioridade de
+janelas de fundo, e isso pode desalinhar as faixas no meio da gravação. No app
+empacotado isso já vem desligado; no navegador comum, não.
 
 ## Quatro coisas que surpreendem
 

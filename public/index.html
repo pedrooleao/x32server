@@ -136,6 +136,30 @@
     font-size: 12.5px;
   }
 
+  .exportar {
+    margin-top: 22px;
+    padding: 14px 16px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: #191c22;
+  }
+  .expbarra {
+    height: 6px;
+    background: #262a31;
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .expbarra span { display: block; height: 100%; width: 0; background: var(--mute); transition: width .25s linear; }
+  .exprodape {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-top: 11px;
+    color: var(--ink-dim);
+    font-size: 13px;
+  }
+  .exprodape span { flex: 1; }
+
   .hint { color: var(--ink-dim); font-size: 13px; margin-top: 26px; }
 
   .rodape {
@@ -186,8 +210,17 @@
     <p class="hint barhint">Clique ou arraste na barra para ir a qualquer ponto. Espaço toca e pausa; setas pulam 5s.</p>
     <div id="strips"></div>
 
+    <div class="exportar hidden" id="expcaixa">
+      <div class="expbarra"><span id="expbarra"></span></div>
+      <div class="exprodape">
+        <span id="expestado">Preparando…</span>
+        <button id="expcancelar">Cancelar</button>
+      </div>
+    </div>
+
     <div class="rodape">
       <button id="trocar">Trocar música</button>
+      <button id="exportar">Exportar mix</button>
       <p class="hint">Os faders mudam aqui quando você mexe no Mixing Station. Mantenha esta janela aberta e o Mac desbloqueado.</p>
     </div>
   </div>

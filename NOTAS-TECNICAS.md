@@ -231,6 +231,28 @@ macOS a pasta do app fica dentro do `.app`, que é só leitura.
 O carregamento automático acontece **uma vez**, quando a página abre. Recarregar
 por baixo de alguém que está no meio de uma aula seria pior que não lembrar.
 
+### A exportação tem de ser em tempo real
+
+Um `OfflineAudioContext` renderizaria em segundos, mas **não aceita
+`MediaElementAudioSourceNode`** — e a alternativa, `decodeAudioData` em todos os
+stems, precisa deles inteiros na memória ao mesmo tempo: ~4,3 GB numa música de
+12 minutos com 17 faixas.
+
+Render por pedaços também não resolve: gate, compressor e filtros são
+estados que reiniciariam a cada emenda, e áudio comprimido não se decodifica por
+intervalo de bytes.
+
+Então é captura ao vivo: `createMediaStreamDestination()` pendurado no master e
+um `MediaRecorder`. Grava exatamente o que sai, com toda a mixagem aplicada.
+
+Formato: `audio/mp4;codecs=mp4a.40.2` quando disponível — abre em qualquer lugar
+e fica pequeno. `webm/opus` como reserva.
+
+**O estrangulamento de janela em segundo plano é um risco real aqui.** A correção
+de deriva entre as faixas roda por temporizador; se o sistema reduzir a
+prioridade da janela no meio de uma gravação de 12 minutos, as faixas
+desalinham. No Electron isso é desligado com `backgroundThrottling: false`.
+
 ### Streaming, não `decodeAudioData`
 
 17 stems de 12 minutos descompactados dão ~4,5 GB de RAM e matam a aba. Cada
