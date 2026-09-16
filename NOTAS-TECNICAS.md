@@ -127,6 +127,21 @@ threshold, knee ou ratio o app roda o mesmo compressor num `OfflineAudioContext`
 com um tom 30 dB abaixo do menor threshold possível, vê quanto de ganho sobra e
 desconta no nó de makeup. O resultado fica em cache por combinação.
 
+### A inclinação dos cortes do EQ é incerta
+
+O README antigo listava "cortes de 12 dB/oitava" como desvio em relação ao X32.
+**Isso nunca foi verificado.** A especificação do protocolo não diz a inclinação
+do LCut/HCut do EQ de canal — o enum é só `{LCut, LShv, PEQ, VEQ, HShv, HCut}`,
+sem escolha de inclinação.
+
+Um indício de que 12 dB/oitava pode estar certo: o EQ de **bus** tem tipos com
+inclinação explícita (`BU6, BU12, BU18, BU24, BS12, BS24, LR12, LR24`), e o de
+canal não tem nenhum. Se o corte do canal fosse ajustável ou mais íngreme,
+provavelmente apareceria ali como aparece no bus.
+
+Enquanto não for medido contra uma X32 de verdade, não afirme nem que bate nem
+que difere.
+
 ### Streaming, não `decodeAudioData`
 
 17 stems de 12 minutos descompactados dão ~4,5 GB de RAM e matam a aba. Cada

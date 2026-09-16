@@ -155,11 +155,30 @@ protocolo do X32, as armadilhas da Web Audio e as do `codesign`.
 
 ## Limitações
 
+Estas são falhas **desta emulação**, não comportamento do X32. Numa mesa de
+verdade tudo abaixo funciona.
+
+**Controles que não mexem no áudio:**
+
+- **Low Cut do preamp** (o botão "Lowcut" na tela do canal) — guarda o valor,
+  não filtra nada. Para cortar grave, use uma banda do EQ como LCut.
+- **Modo EXP da dinâmica** — a X32 tem COMP e EXP; com EXP ligado, aqui o canal
+  passa limpo. Só COMP processa.
+- **Envios para bus e mix de monitor** — guardam o valor, não roteiam áudio.
+- **Cenas e snapshots.**
+
+**Controles que funcionam, mas diferente da mesa real:**
+
+- **Banda VEQ** vira um PEQ comum. Na X32 a VEQ é uma curva de EQ analógico,
+  com resposta diferente de um PEQ limpo.
+- **Ratio 100:1** é limitado a 20:1 — é o teto do compressor da Web Audio. Na
+  X32 o 100:1 é praticamente um limiter.
+
+**Do sistema:**
+
 - O áudio sai pela saída padrão do computador, em estéreo. Mandar cada bus para
   uma saída física exigiria trocar a Web Audio por um host CoreAudio nativo.
 - O `.dmg` é **arm64**: só Mac com Apple Silicon. O `.zip` é **x64**: não roda em
   Windows ARM.
 - O ganho vai até +60 dB, como na mesa real. Passar do ponto distorce mesmo — é
   fidelidade, não defeito.
-- O modo EXP da dinâmica não é emulado, a banda VEQ vira PEQ comum, o ratio
-  100:1 é limitado a 20:1 e os cortes do EQ são de 12 dB/oitava.
