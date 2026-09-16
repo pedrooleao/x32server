@@ -220,6 +220,7 @@ udp.on('message', (msg, rinfo) => {
 // — mensagem no console e saida. Numa janela, morrer calado seria o app sumindo
 // sem explicacao.
 const eventos = new EventEmitter();
+eventos.lembrarPasta = (dir) => lembrarPasta(dir);
 module.exports = eventos;
 
 function falhar(titulo, detalhe) {
@@ -258,8 +259,119 @@ const MIME = {
   '.css': 'text/css; charset=utf-8',
 };
 
+const MIME_AUDIO = {
+  '.wav': 'audio/wav',
+  '.aif': 'audio/aiff',
+  '.aiff': 'audio/aiff',
+  '.mp3': 'audio/mpeg',
+  '.m4a': 'audio/mp4',
+  '.flac': 'audio/flac',
+  '.ogg': 'audio/ogg',
+  '.opus': 'audio/ogg',
+};
+
+// ---------------------------------------------------------------------------
+// Pasta de stems lembrada entre aberturas
+//
+// Guardar o caminho poupa escolher a pasta toda vez que o app abre — numa aula,
+// e' a diferenca entre comecar tocando e comecar procurando arquivo.
+//
+// Os arquivos sao servidos por HTTP COM Range, nao lidos para a memoria: assim
+// o <audio> continua lendo aos poucos, como faz com a pasta escolhida a mao.
+// Sem Range o navegador nao consegue buscar posicao, e a barra de tempo para de
+// funcionar.
+// ---------------------------------------------------------------------------
+const ARQ_CONFIG = path.join(
+  process.env.MESA_CONFIG_DIR || __dirname,
+  '.mesa-config.json'
+);
+const EXT_AUDIO = /\.(wav|aiff?|mp3|m4a|flac|ogg|opus)$/i;
+
+let pastaStems = null;
+try {
+  pastaStems = JSON.parse(fs.readFileSync(ARQ_CONFIG, 'utf8')).pasta || null;
+  if (pastaStems && !fs.existsSync(pastaStems)) pastaStems = null;
+} catch {
+  pastaStems = null;
+}
+
+function lembrarPasta(dir) {
+  pastaStems = dir;
+  try {
+    fs.writeFileSync(ARQ_CONFIG, JSON.stringify({ pasta: dir }, null, 2));
+  } catch (err) {
+    console.error('Nao consegui lembrar a pasta:', err.message);
+  }
+  for (const ws of browsers) {
+    if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'pasta', ...descreverPasta() }));
+  }
+}
+
+function descreverPasta() {
+  if (!pastaStems) return { pasta: null, nome: null, arquivos: [] };
+  let arquivos = [];
+  try {
+    arquivos = fs.readdirSync(pastaStems).filter((f) => EXT_AUDIO.test(f)).sort();
+  } catch {
+    return { pasta: null, nome: null, arquivos: [] };
+  }
+  return { pasta: pastaStems, nome: path.basename(pastaStems), arquivos: arquivos.slice(0, CH_COUNT) };
+}
+
+function servirStem(req, res, nome) {
+  if (!pastaStems) {
+    res.writeHead(404).end('Nenhuma pasta lembrada');
+    return;
+  }
+  const full = path.join(pastaStems, nome);
+  if (!full.startsWith(pastaStems) || !EXT_AUDIO.test(full)) {
+    res.writeHead(403).end('Acesso negado');
+    return;
+  }
+  let st;
+  try {
+    st = fs.statSync(full);
+  } catch {
+    res.writeHead(404).end('Nao encontrado');
+    return;
+  }
+
+  const tipo = MIME_AUDIO[path.extname(full).toLowerCase()] || 'application/octet-stream';
+  const faixa = req.headers.range && /bytes=(\d*)-(\d*)/.exec(req.headers.range);
+  if (faixa) {
+    const ini = faixa[1] ? parseInt(faixa[1], 10) : 0;
+    const fim = faixa[2] ? parseInt(faixa[2], 10) : st.size - 1;
+    if (ini >= st.size || fim >= st.size || ini > fim) {
+      res.writeHead(416, { 'Content-Range': `bytes */${st.size}` }).end();
+      return;
+    }
+    res.writeHead(206, {
+      'Content-Type': tipo,
+      'Content-Length': fim - ini + 1,
+      'Content-Range': `bytes ${ini}-${fim}/${st.size}`,
+      'Accept-Ranges': 'bytes',
+    });
+    fs.createReadStream(full, { start: ini, end: fim }).pipe(res);
+    return;
+  }
+
+  res.writeHead(200, { 'Content-Type': tipo, 'Content-Length': st.size, 'Accept-Ranges': 'bytes' });
+  fs.createReadStream(full).pipe(res);
+}
+
 const server = http.createServer((req, res) => {
   const url = req.url.split('?')[0];
+
+  if (url === '/stems') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(descreverPasta()));
+    return;
+  }
+  if (url.startsWith('/stems/')) {
+    servirStem(req, res, decodeURIComponent(url.slice('/stems/'.length)));
+    return;
+  }
+
   const file = url === '/' ? 'index.html' : url.replace(/^\//, '');
   const full = path.join(__dirname, 'public', file);
   if (!full.startsWith(path.join(__dirname, 'public'))) {
@@ -287,6 +399,13 @@ const browsers = new Set();
 wss.on('connection', (ws) => {
   browsers.add(ws);
   ws.send(JSON.stringify({ type: 'snapshot', state: state.snapshot() }));
+  ws.send(JSON.stringify({
+    type: 'pasta',
+    ...descreverPasta(),
+    // Sem Electron nao ha seletor de pasta nativo: a pagina mantem o seletor
+    // de arquivos comum e nao oferece "lembrar".
+    nativo: !!process.env.MESA_ELECTRON,
+  }));
 
   ws.on('message', (raw) => {
     let msg;
@@ -305,6 +424,12 @@ wss.on('connection', (ws) => {
       });
       const usados = msg.names.filter((n) => n);
       console.log(`${usados.length} stems carregados: ${usados.join(', ')}`);
+    }
+
+    // O navegador nao tem como abrir um seletor de PASTA com caminho. Quem
+    // consegue e' o processo principal do Electron, entao pedimos por evento.
+    if (msg.type === 'escolherPasta') {
+      eventos.emit('escolherPasta');
     }
 
     if (msg.type === 'pedirSnapshot') {

@@ -24,7 +24,22 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 function iniciar() {
+  // O servidor guarda a pasta lembrada junto das preferencias do app, nao na
+  // pasta do programa — que no macOS fica dentro do .app, so leitura.
+  process.env.MESA_CONFIG_DIR = app.getPath('userData');
+  process.env.MESA_ELECTRON = '1';
+
   const mesa = require('./server.js');
+
+  // A janela pede, aqui abrimos o seletor de pasta do sistema.
+  mesa.on('escolherPasta', async () => {
+    const r = await dialog.showOpenDialog(janela, {
+      title: 'Escolha a pasta com os stems',
+      properties: ['openDirectory'],
+      buttonLabel: 'Usar esta pasta',
+    });
+    if (!r.canceled && r.filePaths[0]) mesa.lembrarPasta(r.filePaths[0]);
+  });
 
   mesa.on('falhou', (titulo, detalhe) => {
     app.whenReady().then(() => {

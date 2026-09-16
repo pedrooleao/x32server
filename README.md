@@ -30,12 +30,20 @@ senão o tablet não conecta.
 ## Usar
 
 1. Abra o app e clique em **Escolher pasta**. Aponte para a pasta com os stems.
+   O app **lembra a última pasta** e carrega sozinho na próxima vez que abrir —
+   na aula seguinte é só abrir e dar play.
 2. No tablet, na mesma rede Wi-Fi: **Mixing Station → nova conexão →
    Behringer X32 → o endereço que o app mostra → porta 10023**.
    O endereço está no menu **Mesa → Como conectar o tablet**.
 3. Dê play. Os canais já aparecem no tablet com o nome de cada arquivo.
 
 Para trocar de música, use **Trocar música** no rodapé.
+
+Cada canal tem uma **luz de clipe** ao lado do nome, e há uma para a saída
+principal ao lado do tempo. Ela acende em 0 dBFS e fica acesa por um segundo e
+meio, como a luz vermelha de uma mesa — um estouro de milissegundos sumiria
+antes de qualquer um ver. É o jeito de mostrar ao aluno que o ganho passou do
+ponto.
 
 Se o Mixing Station não achar a mesa sozinho, use "Manual IP" — a descoberta
 automática por broadcast não está implementada.
@@ -74,7 +82,8 @@ de 12 minutos com 17 stems funciona sem estourar a RAM.
 | Low Cut do preamp | ok — 20 a 400 Hz, 12/18/24 dB/oitava |
 | Gate | ok — GATE e EXP2/EXP3/EXP4, com threshold, range, attack, hold, release |
 | Compressor | ok — threshold, ratio, knee, attack, release, makeup, PRE/POST EQ |
-| Medidores | ok — pré-fader, como na X32 |
+| Medidores | ok — pré-fader e de pico, como na X32 |
+| Luz de clipe | ok — por canal e na saída principal |
 | Nome e cor do canal | ok |
 | Transporte | play, pause, stop, ±10s, seek na barra, teclado |
 | Envios para bus / mix de monitor | guarda o valor, não roteia áudio |

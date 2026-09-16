@@ -204,6 +204,33 @@ Medido com 20 arquivos: **52 ms em fila contra 19 ms em paralelo**. Com arquivos
 grandes no disco a diferença é maior, porque as esperas de leitura passam a se
 sobrepor.
 
+### Medidor de pico, não de RMS
+
+Mesa é medidor de pico: é o pico que estoura o conversor, e o valor que o X32
+manda no blob é a amostra mesma, de 0 a 1. Antes ia um RMS multiplicado por 2,2,
+que é aproximação — e com ela o medidor nunca chegava ao topo mesmo com o canal
+clipando, o que tornava impossível mostrar clipe.
+
+### A pasta lembrada é servida por HTTP, com Range
+
+Guardar o caminho da última pasta poupa escolhê-la a cada aula. Mas os arquivos
+**não** podem ser lidos para a memória: são dezenas de MB cada, e isso desfaz o
+streaming.
+
+Então a mesa serve a pasta em `/stems/<nome>` **com suporte a Range**. Sem Range
+o navegador não consegue buscar posição e a barra de tempo para de funcionar.
+
+O seletor de pasta com caminho só existe no processo principal do Electron. A
+janela pede por WebSocket (`escolherPasta`), o `main.js` abre o diálogo do
+sistema e devolve o caminho. Assim não é preciso script de preload nem afrouxar
+o isolamento da janela.
+
+A preferência é guardada em `app.getPath('userData')`, não junto do programa: no
+macOS a pasta do app fica dentro do `.app`, que é só leitura.
+
+O carregamento automático acontece **uma vez**, quando a página abre. Recarregar
+por baixo de alguém que está no meio de uma aula seria pior que não lembrar.
+
 ### Streaming, não `decodeAudioData`
 
 17 stems de 12 minutos descompactados dão ~4,5 GB de RAM e matam a aba. Cada

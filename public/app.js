@@ -12,6 +12,16 @@ let scrubbing = false;
 
 const el = (id) => document.getElementById(id);
 
+// Clipe: acende em 0 dBFS e segura aceso, como a luz vermelha de uma mesa.
+const CLIPE_NIVEL = 0.99;
+const CLIPE_SEGURA = 1500;   // ms
+let clipeMasterAte = 0;
+
+const sondaMaster = ctx.createAnalyser();
+sondaMaster.fftSize = 1024;
+master.connect(sondaMaster);
+const dadosMaster = new Float32Array(sondaMaster.fftSize);
+
 // ---------------------------------------------------------------------------
 // WebSocket com o servidor OSC
 // ---------------------------------------------------------------------------
@@ -42,6 +52,7 @@ function connect() {
       return;
     }
     if (msg.type === 'param') handleParam(msg);
+    if (msg.type === 'pasta') receberPasta(msg);
   };
 }
 
@@ -403,7 +414,7 @@ function limparFaixas() {
     }
     t.audio.removeAttribute('src');
     t.audio.load();
-    URL.revokeObjectURL(t.url);
+    if (t.revogar) URL.revokeObjectURL(t.url);
   }
 
   tracks = [];
@@ -427,11 +438,60 @@ function limparFaixas() {
 el('trocar').addEventListener('click', () => {
   pause();
   limparFaixas();
+  jaAutocarregou = true;   // trocar e' um pedido explicito: nao recarregue sozinho
 });
 
-el('picker').addEventListener('change', async (ev) => {
+const EXT_AUDIO = /\.(wav|aiff?|mp3|m4a|flac|ogg|opus)$/i;
+
+// A mesa lembra a ultima pasta usada e avisa ao conectar. Carregamos sozinho
+// so na primeira vez que a pagina abre — depois disso o usuario esta no meio de
+// alguma coisa, e recarregar por baixo dele seria pior que nao lembrar.
+let pastaLembrada = null;
+let jaAutocarregou = false;
+
+function receberPasta(msg) {
+  pastaLembrada = msg.pasta ? msg : null;
+
+  // O seletor nativo so existe embrulhado no Electron; no navegador comum fica
+  // o seletor de arquivos de sempre.
+  el('btpasta').classList.toggle('hidden', !msg.nativo);
+  el('filebtn').classList.toggle('hidden', !!msg.nativo);
+
+  const aviso = el('pastaatual');
+  if (msg.pasta) {
+    aviso.textContent = `Última pasta: ${msg.nome} (${msg.arquivos.length} faixas)`;
+    aviso.classList.remove('hidden');
+  } else {
+    aviso.classList.add('hidden');
+  }
+
+  if (msg.pasta && msg.arquivos.length && !jaAutocarregou && tracks.length === 0) {
+    jaAutocarregou = true;
+    carregarPastaLembrada();
+  }
+}
+
+function carregarPastaLembrada() {
+  if (!pastaLembrada || !pastaLembrada.arquivos.length) return;
+  carregar(
+    pastaLembrada.arquivos.map((nome) => ({
+      nome,
+      // Servido pela propria mesa, com Range: o <audio> le aos poucos e a barra
+      // de tempo continua funcionando.
+      url: `/stems/${encodeURIComponent(nome)}`,
+      revogar: false,
+    }))
+  );
+}
+
+el('btpasta').addEventListener('click', () => {
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'escolherPasta' }));
+});
+
+// Pasta escolhida a mao pelo seletor de arquivos do navegador.
+el('picker').addEventListener('change', (ev) => {
   const files = [...ev.target.files]
-    .filter((f) => /\.(wav|aiff?|mp3|m4a|flac|ogg|opus)$/i.test(f.name))
+    .filter((f) => EXT_AUDIO.test(f.name))
     .sort((a, b) => a.name.localeCompare(b.name))
     .slice(0, 32);
 
@@ -440,6 +500,14 @@ el('picker').addEventListener('change', async (ev) => {
     return;
   }
 
+  carregar(files.map((f) => ({ nome: f.name, url: URL.createObjectURL(f), revogar: true })));
+});
+
+// Carrega uma lista de faixas. Cada item tem um nome e uma URL — que pode ser
+// de um arquivo escolhido a mao (blob) ou da pasta lembrada, servida pela mesa.
+// Nos dois casos o <audio> le aos poucos; nada e' carregado inteiro na memoria.
+async function carregar(itens) {
+  const files = itens;
   setLoaderText(`Preparando ${files.length} faixas…`);
 
   // O AudioWorklet so existe em contexto seguro: https ou localhost. Aberta pelo
@@ -472,12 +540,9 @@ el('picker').addEventListener('change', async (ev) => {
   const abertos = await Promise.all(
     files.map(async (file) => {
       const audio = new Audio();
-      // Guardamos a URL para poder revogar depois: sao dezenas de MB por faixa,
-      // e sem revogar elas ficam presas na memoria ao trocar de musica.
-      const url = URL.createObjectURL(file);
+      const url = file.url;
       audio.src = url;
       audio.preload = 'auto';
-      audio.crossOrigin = 'anonymous';
 
       try {
         await new Promise((resolve, reject) => {
@@ -486,8 +551,8 @@ el('picker').addEventListener('change', async (ev) => {
           setTimeout(() => reject(new Error('tempo esgotado')), 15000);
         });
       } catch (err) {
-        URL.revokeObjectURL(url);
-        console.error('Não abriu', file.name, err);
+        if (file.revogar) URL.revokeObjectURL(url);
+        console.error('Não abriu', file.nome, err);
         return { file, erro: true };
       }
 
@@ -502,7 +567,7 @@ el('picker').addEventListener('change', async (ev) => {
   for (const aberto of abertos) {
     const { file, audio, url } = aberto;
     if (aberto.erro) {
-      falhas.push(file.name);
+      falhas.push(file.nome);
       continue;
     }
 
@@ -552,9 +617,10 @@ el('picker').addEventListener('change', async (ev) => {
     gain.gain.value = faderToGain(0.75);
 
     const faixa = {
-      name: file.name.replace(/\.[^.]+$/, '').slice(0, 12),
+      name: file.nome.replace(/\.[^.]+$/, '').slice(0, 12),
       audio,
       url,
+      revogar: file.revogar,
       src,
       trim,
       hp1,
@@ -624,7 +690,7 @@ el('picker').addEventListener('change', async (ev) => {
   }
 
   paintTime();
-});
+}
 
 function setLoaderText(txt) {
   el('loader').querySelector('p').textContent = txt;
@@ -717,6 +783,7 @@ function buildStrips() {
         <div class="name">${t.name}</div>
         <div class="meter"><span data-meter="${i}"></span></div>
       </div>
+      <div class="clipe" data-clipe="${i}" title="Clipe"></div>
       <div class="db" data-db="${i}"></div>
       <div class="state on" data-state="${i}">ativo</div>`;
     host.appendChild(row);
@@ -767,17 +834,42 @@ function paintTime() {
 setInterval(() => {
   if (tracks.length === 0) return;
 
+  // Medidor de PICO, nao de RMS. Mesa e' medidor de pico: e' o pico que estoura
+  // o conversor, e o valor que o X32 manda no blob e' a amostra mesma, de 0 a 1.
+  // Antes ia um RMS multiplicado por 2.2, que e' aproximacao — e com ela o
+  // medidor nunca chegava ao topo mesmo com o canal clipando.
+  const agora = performance.now();
   const values = tracks.map((t) => {
     t.analyser.getFloatTimeDomainData(t.data);
-    let sum = 0;
-    for (let i = 0; i < t.data.length; i++) sum += t.data[i] * t.data[i];
-    return Math.min(1, Math.sqrt(sum / t.data.length) * 2.2);
+    let pico = 0;
+    for (let i = 0; i < t.data.length; i++) {
+      const v = t.data[i] < 0 ? -t.data[i] : t.data[i];
+      if (v > pico) pico = v;
+    }
+    // Segura o clipe aceso por um tempo, como a luz vermelha de uma mesa: um
+    // estouro de milissegundos some antes de qualquer um ver.
+    if (pico >= CLIPE_NIVEL) t.clipeAte = agora + CLIPE_SEGURA;
+    return Math.min(1, pico);
   });
 
   values.forEach((v, i) => {
     const b = el('strips').querySelector(`[data-meter="${i}"]`);
     if (b) b.style.width = `${Math.round(v * 100)}%`;
+    const luz = el('strips').querySelector(`[data-clipe="${i}"]`);
+    if (luz) luz.classList.toggle('aceso', tracks[i].clipeAte > agora);
   });
+
+  // Clipe na saida principal: e' a soma de todos os canais que estoura primeiro.
+  if (sondaMaster) {
+    sondaMaster.getFloatTimeDomainData(dadosMaster);
+    let picoLR = 0;
+    for (let i = 0; i < dadosMaster.length; i++) {
+      const v = dadosMaster[i] < 0 ? -dadosMaster[i] : dadosMaster[i];
+      if (v > picoLR) picoLR = v;
+    }
+    if (picoLR >= CLIPE_NIVEL) clipeMasterAte = agora + CLIPE_SEGURA;
+    el('clipelr').classList.toggle('aceso', clipeMasterAte > agora);
+  }
 
   // Reducao do compressor como multiplicador, que e' a convencao do X32:
   // 1 = sem reducao. comp.reduction vem em dB negativos.

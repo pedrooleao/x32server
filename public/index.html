@@ -101,7 +101,7 @@
 
   .strip {
     display: grid;
-    grid-template-columns: 26px 1fr 62px 44px;
+    grid-template-columns: 26px 1fr 10px 62px 44px;
     gap: 12px;
     align-items: center;
     padding: 9px 0;
@@ -117,6 +117,24 @@
   .state.off { color: var(--mute); }
   .state.solo { color: var(--signal); font-weight: 600; }
   .state.calado { color: #5b6270; }
+
+  .clipe {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #2b3038;
+    transition: background .1s;
+  }
+  .clipe.aceso { background: var(--mute); box-shadow: 0 0 7px var(--mute); }
+
+  .lr {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin-left: 14px;
+    color: var(--ink-dim);
+    font-size: 12.5px;
+  }
 
   .hint { color: var(--ink-dim); font-size: 13px; margin-top: 26px; }
 
@@ -146,10 +164,12 @@
 
   <div class="load" id="loader">
     <p>Escolha a pasta com os stems da música. Cada arquivo vira um canal, na ordem alfabética.</p>
-    <label class="filebtn">
+    <button id="btpasta" class="hidden">Escolher pasta</button>
+    <label class="filebtn" id="filebtn">
       Escolher pasta
       <input type="file" id="picker" webkitdirectory directory multiple accept="audio/*">
     </label>
+    <p class="hint hidden" id="pastaatual"></p>
   </div>
 
   <div id="deck" class="hidden">
@@ -158,6 +178,7 @@
       <button id="stopbtn">Parar</button>
       <button id="back10">&minus;10s</button>
       <button id="fwd10">+10s</button>
+      <span class="lr"><span class="clipe" id="clipelr" title="Clipe na saída principal"></span>LR</span>
       <span class="time" id="time">0:00 / 0:00</span>
     </div>
 
