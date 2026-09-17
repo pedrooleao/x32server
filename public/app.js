@@ -569,7 +569,26 @@ function receberPasta(msg) {
     aviso.classList.add('hidden');
   }
 
-  if (msg.pasta && msg.arquivos.length && !jaAutocarregou && tracks.length === 0) {
+  if (!msg.pasta || !msg.arquivos.length) return;
+
+  // Pedido explicito: o usuario acabou de escolher a pasta no dialogo. Carrega
+  // sempre, trocando o que estiver tocando.
+  //
+  // O 'jaAutocarregou' existe para nao recarregar por baixo de quem esta no meio
+  // de uma aula — mas ele estava barrando tambem a escolha do usuario, e a pasta
+  // nova so entrava na segunda tentativa, por outro caminho.
+  if (msg.escolhida) {
+    jaAutocarregou = true;
+    if (tracks.length) {
+      pause();
+      limparFaixas();
+    }
+    carregarPastaLembrada();
+    return;
+  }
+
+  // Aviso de abertura: carrega uma vez so, e so se nao houver nada carregado.
+  if (!jaAutocarregou && tracks.length === 0) {
     jaAutocarregou = true;
     carregarPastaLembrada();
   }

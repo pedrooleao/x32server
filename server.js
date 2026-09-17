@@ -302,9 +302,18 @@ function lembrarPasta(dir) {
   } catch (err) {
     console.error('Nao consegui lembrar a pasta:', err.message);
   }
+  // 'escolhida' distingue o pedido explicito do usuario do aviso de abertura.
+  // Sem isso a janela nao sabe se deve carregar por cima do que ja esta tocando.
+  // E o 'nativo' precisa ir SEMPRE: faltando, a janela achava que nao havia
+  // seletor do sistema e trocava o botao pelo seletor de arquivos comum.
+  const aviso = JSON.stringify({ type: 'pasta', ...descreverPasta(), nativo: temSeletorNativo(), escolhida: true });
   for (const ws of browsers) {
-    if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'pasta', ...descreverPasta() }));
+    if (ws.readyState === 1) ws.send(aviso);
   }
+}
+
+function temSeletorNativo() {
+  return !!process.env.MESA_ELECTRON;
 }
 
 function descreverPasta() {
@@ -404,7 +413,8 @@ wss.on('connection', (ws) => {
     ...descreverPasta(),
     // Sem Electron nao ha seletor de pasta nativo: a pagina mantem o seletor
     // de arquivos comum e nao oferece "lembrar".
-    nativo: !!process.env.MESA_ELECTRON,
+    nativo: temSeletorNativo(),
+    escolhida: false,
   }));
 
   ws.on('message', (raw) => {

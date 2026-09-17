@@ -249,6 +249,24 @@ par compartilhado. Parece desperdício, mas é o que permite renderizar um canal
 de cada vez — e dá exatamente no mesmo resultado, porque delay e convolução são
 lineares: somar depois de processar é igual a processar a soma.
 
+### Escolher pasta: o aviso precisa dizer se foi pedido
+
+A janela carrega a pasta lembrada sozinha **uma vez**, na abertura — recarregar
+por baixo de quem está no meio de uma aula seria pior que não lembrar. A trava
+que garante isso (`jaAutocarregou`) estava barrando também **a escolha explícita
+do usuário**: escolher outra pasta não trocava nada.
+
+E a mensagem enviada ao escolher omitia o campo `nativo`, então a janela
+concluía que não havia seletor do sistema e trocava o botão pelo seletor de
+arquivos comum.
+
+Os dois juntos davam o sintoma de "tem que escolher duas vezes": a primeira não
+carregava e trocava o botão; a segunda funcionava por outro caminho, o seletor
+do navegador.
+
+A mensagem agora leva `escolhida: true` quando vem de um pedido do usuário, e o
+`nativo` vai sempre.
+
 ### A exportação é acelerada, canal por canal
 
 O gargalo nunca foi o processamento: era o **codificador**, que grava em tempo
