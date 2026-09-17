@@ -478,6 +478,8 @@ function pushToBrowser(address, written) {
       channel = {
         num, eq: c.eq, gate: c.gate, dyn: c.dyn, trim: c.trim, ha: c.gain,
         hp: { on: c.hpon, slope: c.hpslope, f: c.hpf },
+        sends: c.sends.slice(0, 2),
+        sendsOn: c.sendsOn.slice(0, 2),
       };
     }
   }
@@ -486,11 +488,20 @@ function pushToBrowser(address, written) {
   // ligar o solo do canal 3 cala os outros 31. Entao mandamos o quadro inteiro.
   const solos = soloMatch ? state.channels.map((c) => c.solo) : undefined;
 
+  // Buses 1 e 2 sao os retornos de efeito, e /fx/... e' o ajuste dos efeitos.
+  // Nos dois casos o navegador precisa do quadro, nao de um valor solto.
+  const mexeuBus = /^\/bus\/(01|02)\//.test(address);
+  const mexeuFx = /^\/fx\/[12]\//.test(address);
+  const buses = mexeuBus ? state.buses.slice(0, 2).map((b) => ({ fader: b.fader, on: b.on })) : undefined;
+  const fx = mexeuFx ? state.fx : undefined;
+
   const payload = JSON.stringify({
     type: 'param',
     address,
     channel,
     solos,
+    buses,
+    fx,
     value: written.value,
     gain: written.type === 'f' && /mix\/fader$/.test(address) ? faderToGain(written.value) : undefined,
   });

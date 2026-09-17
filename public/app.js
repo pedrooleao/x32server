@@ -22,6 +22,96 @@ let clipeMasterAte = 0;
 const gravacao = ctx.createMediaStreamDestination();
 master.connect(gravacao);
 
+// ---------------------------------------------------------------------------
+// Os dois efeitos: delay no bus 1, reverb no bus 2
+//
+// Envio classico de console: cada canal manda um tanto para o bus, o bus
+// processa, e o fader do bus decide quanto do efeito volta para o LR. O envio
+// sai DEPOIS do fader do canal, que e' o normal para efeito — baixar o canal
+// leva o efeito junto, em vez de deixar so o rastro tocando.
+// ---------------------------------------------------------------------------
+const FX_TEMPO_MAX = 1.5;      // s, o maximo do delay
+const FX_CAUDA_MAX = 6;        // s, a cauda mais longa do reverb
+
+function construirEfeitos(contexto, destino) {
+  // --- delay, com realimentacao e um corte de agudo a cada repeticao, que e'
+  // o que faz a cauda soar natural em vez de metalica.
+  const entradaDelay = contexto.createGain();
+  const linha = contexto.createDelay(FX_TEMPO_MAX);
+  const realimenta = contexto.createGain();
+  const corte = contexto.createBiquadFilter();
+  corte.type = 'lowpass';
+  corte.frequency.value = 3200;
+  const faderDelay = contexto.createGain();
+
+  entradaDelay.connect(linha);
+  linha.connect(corte).connect(realimenta).connect(linha);
+  linha.connect(faderDelay).connect(destino);
+
+  // --- reverb por convolucao. A resposta impulsiva e' gerada aqui mesmo:
+  // ruido que decai exponencialmente. Nao e' uma sala medida, mas soa como
+  // sala e nao custa arquivo nenhum.
+  const entradaReverb = contexto.createGain();
+  const convolucao = contexto.createConvolver();
+  const faderReverb = contexto.createGain();
+  entradaReverb.connect(convolucao).connect(faderReverb).connect(destino);
+
+  return { entradaDelay, linha, realimenta, faderDelay, entradaReverb, convolucao, faderReverb };
+}
+
+function gerarCauda(contexto, segundos) {
+  const n = Math.max(1, Math.floor(contexto.sampleRate * segundos));
+  const buf = contexto.createBuffer(2, n, contexto.sampleRate);
+  for (let c = 0; c < 2; c++) {
+    const d = buf.getChannelData(c);
+    for (let i = 0; i < n; i++) {
+      // O expoente 2.2 tira o "chiado" do fim que um decaimento reto deixa.
+      d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 2.2);
+    }
+  }
+  return buf;
+}
+
+const fx = construirEfeitos(ctx, master);
+// Estado dos efeitos, para nao regerar a cauda a cada mensagem.
+let caudaAtual = -1;
+
+function aplicarFx(lista) {
+  if (!lista || lista.length < 2) return;
+  const agora = ctx.currentTime;
+
+  // Delay: par 01 = tempo, par 02 = realimentacao.
+  const tempo = Math.max(0.02, lista[0].par[0] * FX_TEMPO_MAX);
+  fx.linha.delayTime.setTargetAtTime(tempo, agora, 0.05);
+  // Ate 0.85: acima disso a realimentacao cresce sozinha e nao para mais.
+  fx.realimenta.gain.setTargetAtTime(Math.min(0.85, lista[0].par[1]), agora, 0.05);
+
+  // Reverb: par 01 = tamanho da cauda.
+  const segundos = Math.max(0.3, lista[1].par[0] * FX_CAUDA_MAX);
+  if (Math.abs(segundos - caudaAtual) > 0.05) {
+    caudaAtual = segundos;
+    fx.convolucao.buffer = gerarCauda(ctx, segundos);
+  }
+}
+
+function aplicarBuses(buses) {
+  if (!buses || buses.length < 2) return;
+  const agora = ctx.currentTime;
+  // O fader do bus e' o quanto do efeito volta para o LR.
+  fx.faderDelay.gain.setTargetAtTime(buses[0].on ? faderToGain(buses[0].fader) : 0, agora, 0.02);
+  fx.faderReverb.gain.setTargetAtTime(buses[1].on ? faderToGain(buses[1].fader) : 0, agora, 0.02);
+}
+
+function aplicarEnvios(t, sends, sendsOn) {
+  if (!t.envio) return;
+  const agora = ctx.currentTime;
+  for (let i = 0; i < 2; i++) {
+    const nivel = sends && sends[i] !== undefined ? sends[i] : 0;
+    const ligado = !sendsOn || sendsOn[i] === undefined || sendsOn[i] === 1;
+    t.envio[i].gain.setTargetAtTime(ligado ? faderToGain(nivel) : 0, agora, 0.02);
+  }
+}
+
 const sondaMaster = ctx.createAnalyser();
 sondaMaster.fftSize = 1024;
 master.connect(sondaMaster);
@@ -51,6 +141,8 @@ function connect() {
     if (msg.type === 'snapshot') {
       msg.state.channels.forEach((c, i) => applyChannel(i, c));
       aplicarSolos(msg.state.channels.map((c) => c.solo));
+      aplicarFx(msg.state.fx);
+      aplicarBuses(msg.state.buses);
       main.fader = msg.state.main.fader;
       main.on = msg.state.main.on;
       refreshMaster();
@@ -61,7 +153,11 @@ function connect() {
   };
 }
 
-function handleParam({ address, value, gain, channel: msgState, solos }) {
+function handleParam({ address, value, gain, channel: msgState, solos, buses, fx: fxEstado }) {
+  // Buses 1 e 2 sao os retornos de efeito; /fx/... e' o ajuste dos efeitos.
+  if (buses) aplicarBuses(buses);
+  if (fxEstado) aplicarFx(fxEstado);
+  if (/^\/(bus|fx)\//.test(address)) return;
   // Ganho de preamp: chega sem numero de canal. O servidor ja resolveu de qual
   // canal e', pelo foco, e manda o bloco do canal em msgState.
   if (/^\/headamp\/\d{1,3}\/gain$/.test(address)) {
@@ -95,6 +191,8 @@ function handleParam({ address, value, gain, channel: msgState, solos }) {
       applyTrim(t, msgState && msgState.ha, value);
     } else if (key.startsWith('preamp/hp')) {
       if (msgState) applyHp(t, msgState.hp);
+    } else if (/^mix\/\d{2}\/(level|on)$/.test(key)) {
+      if (msgState) aplicarEnvios(t, msgState.sends, msgState.sendsOn);
     } else if (msgState) {
       if (key.startsWith('eq')) applyEqAll(t, msgState.eq);
       if (key.startsWith('gate')) applyGate(t, msgState.gate);
@@ -121,6 +219,7 @@ function applyChannel(i, c) {
   rampGain(t);
   applyTrim(t, c.ha, c.trim);
   applyHp(t, c.hp);
+  aplicarEnvios(t, c.sends, c.sendsOn);
   if (c.eq) applyEqAll(t, c.eq);
   if (c.gate) applyGate(t, c.gate);
   if (c.dyn) applyDyn(t, c.dyn);
@@ -414,7 +513,7 @@ function applyDyn(t, d) {
 function limparFaixas() {
   for (const t of tracks) {
     try { t.audio.pause(); } catch (e) { /* elemento ja descartado */ }
-    for (const no of [t.src, t.trim, t.hp1, t.hp2, t.gate, ...t.eq, t.comp, t.makeup, t.gain, t.pan, t.analyser]) {
+    for (const no of [t.src, t.trim, t.hp1, t.hp2, t.gate, ...t.eq, t.comp, t.makeup, t.gain, t.pan, ...(t.envio || []), t.analyser]) {
       if (no) { try { no.disconnect(); } catch (e) { /* ja desconectado */ } }
     }
     t.audio.removeAttribute('src');
@@ -566,6 +665,25 @@ async function renderizarCanal(off, t, amostras) {
   fader.gain.value = t.gain.gain.value;      // ja inclui mute e solo
   const pan = off.createStereoPanner();
   pan.pan.value = t.pan.pan.value;
+
+  // Os efeitos entram aqui tambem, senao a mixagem exportada sai seca.
+  //
+  // Cada canal leva a sua propria copia do delay e do reverb, em vez de um par
+  // compartilhado. Da' no mesmo: delay e convolucao sao lineares, entao somar
+  // depois de processar e' igual a processar a soma. E e' o que permite
+  // renderizar um canal de cada vez, que e' o que segura a memoria.
+  const efeitos = construirEfeitos(off, off.destination);
+  efeitos.linha.delayTime.value = fx.linha.delayTime.value;
+  efeitos.realimenta.gain.value = fx.realimenta.gain.value;
+  efeitos.convolucao.buffer = fx.convolucao.buffer;
+  efeitos.faderDelay.gain.value = fx.faderDelay.gain.value;
+  efeitos.faderReverb.gain.value = fx.faderReverb.gain.value;
+
+  const envio = [off.createGain(), off.createGain()];
+  envio[0].gain.value = t.envio[0].gain.value;
+  envio[1].gain.value = t.envio[1].gain.value;
+  fader.connect(envio[0]).connect(efeitos.entradaDelay);
+  fader.connect(envio[1]).connect(efeitos.entradaReverb);
 
   src.connect(trim).connect(hp1).connect(hp2);
   const entrada = gate ? (hp2.connect(gate), gate) : hp2;
@@ -921,6 +1039,9 @@ async function carregar(itens) {
     const makeup = ctx.createGain();
     const gain = ctx.createGain();
     const pan = ctx.createStereoPanner();
+    // Um envio por efeito. Saem DEPOIS do fader, que e' o normal para efeito.
+    const envio = [ctx.createGain(), ctx.createGain()];
+    for (const e of envio) e.gain.value = 0;
     const analyser = ctx.createAnalyser();
     analyser.fftSize = 512;
 
@@ -930,6 +1051,8 @@ async function carregar(itens) {
     eq[0].connect(eq[1]).connect(eq[2]).connect(eq[3]);
     comp.connect(makeup);
     gain.connect(pan).connect(master);
+    gain.connect(envio[0]).connect(fx.entradaDelay);
+    gain.connect(envio[1]).connect(fx.entradaReverb);
     // A ligacao entre gate, EQ e compressor depende do PRE/POST e e' feita por
     // religarDinamica, chamada logo abaixo com o estado da mesa.
 
@@ -956,6 +1079,7 @@ async function carregar(itens) {
       makeup,
       gain,
       pan,
+      envio,
       analyser,
       data: new Float32Array(analyser.fftSize),
       on: 1,

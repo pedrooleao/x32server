@@ -84,16 +84,20 @@ de 12 minutos com 17 stems funciona sem estourar a RAM.
 | Compressor | ok — threshold, ratio, knee, attack, release, makeup, PRE/POST EQ |
 | Medidores | ok — pré-fader e de pico, como na X32 |
 | Luz de clipe | ok — por canal e na saída principal |
-| Exportar a mixagem | ok — grava em tempo real, sai um `.m4a` |
+| Exportar a mixagem | ok — sai um `.m4a`, bem mais rápido que a música |
 | Nome e cor do canal | ok |
 | Transporte | play, pause, stop, ±10s, seek na barra, teclado |
-| Envios para bus / mix de monitor | guarda o valor, não roteia áudio |
+| Delay (bus 1) e Reverb (bus 2) | ok — envio por canal, retorno pelo fader do bus |
+| Demais envios para bus | guardam o valor, não roteiam áudio |
 | Cenas e snapshots | não |
 
 Cada canal roda a cadeia na mesma ordem da mesa real:
 
 ```
-stem → ganho → gate → EQ → compressor → fader → pan → LR
+stem → ganho → low cut → gate → EQ → compressor → fader → pan → LR
+                                                      │
+                                                      └─→ envios → Delay (bus 1)
+                                                                 → Reverb (bus 2)
 ```
 
 ## Exportar a mixagem do aluno
@@ -116,6 +120,29 @@ Em navegador antigo, sem codificador próprio, o app cai para a gravação em te
 real — aí a música toca inteira e você precisa esperar. Nesse caso, deixe a
 janela na frente: o sistema reduz a prioridade de janelas de fundo e isso pode
 desalinhar as faixas no meio da gravação.
+
+## Os dois efeitos
+
+O **bus 1 é o Delay** e o **bus 2 é o Reverb**, já nomeados e coloridos no
+Mixing Station. Funciona como envio de console:
+
+1. **Quanto cada canal manda** — o envio do canal para o bus 1 ou 2. É aqui que
+   se decide quais instrumentos vão para o efeito.
+2. **Quanto o efeito volta** — o fader do bus. Baixar o bus 2 em 10 dB baixa a
+   cauda do reverb em 10 dB, sem tocar no som seco do canal.
+
+O envio sai **depois do fader do canal**, que é o normal para efeito: baixar o
+canal leva o efeito junto, em vez de deixar o rastro tocando sozinho.
+
+Os ajustes dos efeitos ficam na tela de FX do Mixing Station:
+
+| | |
+|---|---|
+| FX 1, parâmetro 1 | tempo do delay, até 1,5 s |
+| FX 1, parâmetro 2 | realimentação — quantas repetições |
+| FX 2, parâmetro 1 | tamanho da cauda do reverb, até 6 s |
+
+A mixagem exportada leva os efeitos junto.
 
 ## Quatro coisas que surpreendem
 

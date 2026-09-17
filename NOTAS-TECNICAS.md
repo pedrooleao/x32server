@@ -231,6 +231,24 @@ macOS a pasta do app fica dentro do `.app`, que é só leitura.
 O carregamento automático acontece **uma vez**, quando a página abre. Recarregar
 por baixo de alguém que está no meio de uma aula seria pior que não lembrar.
 
+### Os efeitos, e por que cada canal leva a própria cópia na exportação
+
+Bus 1 = delay, bus 2 = reverb. No modelo do X32: `/fx/1/type` = 10 (DLY) com
+`source` = MIX1, `/fx/2/type` = 0 (HALL) com `source` = MIX2. Os índices vêm da
+lista de tipos da especificação, não de chute.
+
+O delay é uma linha com realimentação e um corte de agudo no laço — sem esse
+corte a cauda soa metálica. A realimentação é limitada a 0,85: acima disso ela
+cresce sozinha e não para mais.
+
+O reverb é convolução com uma resposta impulsiva gerada na hora: ruído decaindo
+com expoente 2,2. Não é uma sala medida, mas soa como sala e não custa arquivo.
+
+**Na exportação, cada canal leva a própria cópia dos dois efeitos** em vez de um
+par compartilhado. Parece desperdício, mas é o que permite renderizar um canal
+de cada vez — e dá exatamente no mesmo resultado, porque delay e convolução são
+lineares: somar depois de processar é igual a processar a soma.
+
 ### A exportação é acelerada, canal por canal
 
 O gargalo nunca foi o processamento: era o **codificador**, que grava em tempo

@@ -145,6 +145,7 @@ class MixerState {
         // para o /headamp/000 — o servidor resolve isso pelo canal em foco.
         source: i,
         sends: new Array(BUS_COUNT).fill(0.0),
+        sendsOn: new Array(BUS_COUNT).fill(1),
 
         // Valores normalizados 0..1, como o X32 transmite por OSC.
         eq: {
@@ -185,8 +186,21 @@ class MixerState {
     this.main = { fader: 0.75, on: 1, pan: 0.5, name: 'LR' };
     this.buses = [];
     for (let i = 1; i <= BUS_COUNT; i++) {
-      this.buses.push({ index: i, name: '', color: 1, fader: 0.75, on: 1 });
+      // Os buses 1 e 2 sao os efeitos. Ja nascem com nome e cor para o operador
+      // achar sem procurar, e com o fader em 0 dB: o quanto o efeito volta para
+      // o LR e' esse fader.
+      const efeito = i === 1 ? 'Delay' : i === 2 ? 'Reverb' : '';
+      this.buses.push({ index: i, name: efeito, color: i === 1 ? 4 : i === 2 ? 6 : 1, fader: 0.75, on: 1 });
     }
+
+    // Dois efeitos, nos moldes da X32: o slot 1 e' um delay alimentado pelo
+    // MIX1, o slot 2 e' um reverb de sala alimentado pelo MIX2.
+    //   tipo 10 = DLY, tipo 0 = HALL, na lista de tipos do X32
+    //   source 1 = MIX1, source 2 = MIX2
+    this.fx = [
+      { type: 10, source: 1, par: [0.35, 0.30, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5] },
+      { type: 0, source: 2, par: [0.45, 0.30, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5] },
+    ];
     // Enderecos fora do modelo acima, guardados como vieram.
     this.extra = new Map();
 
@@ -309,10 +323,14 @@ class MixerState {
             return { type: 'f', value: ch.dyn[field] };
           }
 
-          const sendMatch = key.match(/^mix\/(\d{2})\/level$/);
+          const sendMatch = key.match(/^mix\/(\d{2})\/(level|on)$/);
           if (sendMatch) {
             const idx = parseInt(sendMatch[1], 10) - 1;
             if (idx >= 0 && idx < BUS_COUNT) {
+              if (sendMatch[2] === 'on') {
+                if (write) ch.sendsOn[idx] = newValue ? 1 : 0;
+                return { type: 'i', value: ch.sendsOn[idx] };
+              }
               if (write) ch.sends[idx] = clamp01(newValue);
               return { type: 'f', value: ch.sends[idx] };
             }
@@ -354,6 +372,29 @@ class MixerState {
         if (write) ch.gain = clamp01(newValue);
         return { type: 'f', value: ch.gain };
       }
+    }
+
+    // Efeitos. So os dois primeiros slots existem aqui; os outros caem no
+    // catch-all para o sync nao quebrar.
+    m = address.match(/^\/fx\/([1-8])\/(type|source|par\/(\d{2}))$/);
+    if (m) {
+      const fx = this.fx[parseInt(m[1], 10) - 1];
+      if (fx) {
+        if (m[3]) {
+          const i = parseInt(m[3], 10) - 1;
+          if (i >= 0 && i < fx.par.length) {
+            if (write) fx.par[i] = clamp01(newValue);
+            return { type: 'f', value: fx.par[i] };
+          }
+        } else if (m[2] === 'type') {
+          if (write) fx.type = newValue | 0;
+          return { type: 'i', value: fx.type };
+        } else {
+          if (write) fx.source = newValue | 0;
+          return { type: 'i', value: fx.source };
+        }
+      }
+      return this.extraAccess(address, newValue);
     }
 
     // Solo. Na X32 nao e' um endereco de canal: e' /-stat/solosw/NN, numerado
@@ -584,10 +625,14 @@ class MixerState {
         trim: c.trim,                 // trim digital, 0..1 = -18 a +18 dB
         ha: c.gain,                   // ganho de preamp, 0..1 = -12 a +60 dB
         hp: { on: c.hpon, slope: c.hpslope, f: c.hpf },
+        sends: c.sends.slice(0, 2),
+        sendsOn: c.sendsOn.slice(0, 2),
         eq: c.eq,
         gate: c.gate,
         dyn: c.dyn,
       })),
+      buses: this.buses.slice(0, 2).map((b) => ({ fader: b.fader, on: b.on })),
+      fx: this.fx,
       main: { ...this.main, gain: faderToGain(this.main.fader) },
       tapeState: this.tapeState,
     };
