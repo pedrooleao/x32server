@@ -30,6 +30,13 @@ jobs:
       - name: Testar a mesa rodando no Node
         shell: pwsh
         run: |
+          # Uma pasta de stems vazia, so para o teste ter onde escrever o WAV
+          # de rampa. Sem pasta lembrada o teste do corte de PCM se pula — e o
+          # corte e' conta de byte, justo o que muda de sistema para sistema.
+          New-Item -ItemType Directory -Force -Path 'stems-teste' | Out-Null
+          $pasta = (Resolve-Path 'stems-teste').Path
+          @{ pasta = $pasta } | ConvertTo-Json | Set-Content '.mesa-config.json'
+
           $mesa = Start-Process node -ArgumentList 'server.js' -PassThru -NoNewWindow
           Start-Sleep -Seconds 4
           try {

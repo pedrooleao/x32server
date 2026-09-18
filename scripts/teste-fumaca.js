@@ -84,8 +84,9 @@ async function testarPcm() {
     pasta = null;
   }
   if (!pasta) {
-    // Sem pasta lembrada nao ha o que cortar; nao e' falha da mesa.
-    console.log('  --    corte de PCM (nenhuma pasta de stems lembrada)');
+    // Nao e' falha da mesa, mas tambem nao pode passar batido: o corte de PCM
+    // e' conta de byte, e e' o que mais tem chance de mudar de sistema.
+    console.log('  AVISO corte de PCM nao testado (nenhuma pasta de stems lembrada)');
     return;
   }
 
