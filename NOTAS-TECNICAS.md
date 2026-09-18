@@ -12,7 +12,9 @@ Mixing Station ──OSC/UDP:10023──▶ server.js ──WebSocket──▶ n
 - `osc.js` — codec OSC 1.0, sem dependências
 - `mixer-state.js` — estado da mesa: 32 canais, 16 buses, LR, curvas do X32
 - `server.js` — protocolo do X32 e servidor HTTP/WebSocket
+- `wav.js` — lê WAV e AIFF para cortar os stems em pedaços
 - `public/` — player e engine de áudio
+- `public/pcm.js` — toca uma faixa sem compressão aos pedaços
 - `main.js` — janela do Electron; roda o `server.js` sem alterá-lo
 
 A janela carrega `http://localhost:8080`, **não** o arquivo por `file://`: o
@@ -101,6 +103,107 @@ MESA_GANHO=1 npm start    # só o que tem a ver com ganho de entrada
 
 Mexa só naquele botão e veja o endereço e o valor. É o jeito de saber se um
 controle vai para onde você acha que vai.
+
+---
+
+## Por que as faixas sem compressão não usam `<audio>`
+
+Esta é a razão de existirem `wav.js` e `public/pcm.js`. A versão 0.4.1 tocava
+cada stem num elemento `<audio>`, e com 18 stems de 24 bits **metade das faixas
+tocava muda**: relógio andando, medidor zerado, nenhum erro na tela.
+
+São três limites do navegador, empilhados. Vale registrar os três, porque cada um
+deles sozinho já engana.
+
+### 1. Seis conexões por origem
+
+O Chrome abre no máximo **6 conexões simultâneas por origem**, e origem inclui a
+**porta**. Um `<audio>` tocando segura a conexão dele o tempo todo. Com 18 stems
+saindo da porta 8080, 12 nunca conseguiam socket: `networkState` 2 (carregando)
+para sempre, `buffered` parado em 3 s.
+
+Medido com `lsof`: exatamente 6 conexões de mídia, mais a do WebSocket.
+
+A mesa passou a abrir **portas vizinhas** (8081 a 8086) só para os stems, e o
+player reparte as faixas entre elas, 5 por porta. Cada porta é uma origem
+diferente e ganha o seu próprio limite.
+
+> Alias de loopback (`127.0.0.2` e seguintes) seriam mais limpos que portas
+> extras, mas **o macOS só responde por `127.0.0.1`** sem um alias criado com
+> `sudo ifconfig lo0 alias`. No Linux o /8 inteiro responde; aqui não.
+
+Stem de porta vizinha é cross-origin: sem `Access-Control-Allow-Origin` e
+`crossOrigin = 'anonymous'`, a Web Audio trata o áudio como "sujo" e o canal sai
+**mudo, sem erro nenhum**.
+
+### 2. O laço de correção de deriva cancelava o próprio download
+
+Havia um laço que, a cada 50 ms, realinhava qualquer faixa mais de 40 ms fora do
+relógio. Mas escrever `currentTime` é um **salto**: cancela o download em curso e
+começa outro.
+
+Numa faixa que ficou sem dado, a correção chegava 20 vezes por segundo e
+cancelava justamente o download que a salvaria. Resultado medido: **47.572
+pedidos abortados** (`net::ERR_ABORTED`) em dois minutos, faixa muda para sempre
+e a máquina inteira arrastando.
+
+Era isto que transformava o tropeço de uma faixa em travamento geral — e é a
+parte que o usuário sentia como "a mesa travou".
+
+### 3. O orçamento de memória de mídia é global, e quem chega primeiro leva
+
+Este é o limite de verdade, e o mais difícil de ver. Um `<audio>` guarda tudo o
+que já leu **desde o começo da música** — `buffered.start(0)` nunca sai de 0. O
+Chrome tem um orçamento de memória de mídia para a página inteira, medido aqui em
+**cerca de 175 MB**, e ele **não é repartido**: as primeiras faixas a pedir ficam
+com ~100 s cada uma, e as últimas não recebem mais nada. Nunca se recuperam.
+
+A prova: soltando o `src` das faixas saudáveis, as famintas pularam de 15–26 s
+para ~100 s de buffer em 8 segundos, sem mais nenhuma mudança.
+
+Duas saídas foram testadas e **não** resolvem:
+
+| Tentativa | Resultado |
+|---|---|
+| Entregar cada stem no ritmo de 3x o tempo real, para ninguém correr na frente | **Piorou**: de 3 faixas mudas para 8 |
+| Baixar de 24 para 16 bits (1,5x menos bytes) | Insuficiente: 21 canais × 96 kB/s ainda passa do orçamento |
+
+O que resolve é o navegador guardar menos. Com os mesmos 18 stems em AAC de
+128 kbps, tudo toca liso — mas transcodificar exigiria um codificador que o Node
+não tem e que o Windows não traz.
+
+### A saída: a mesa corta, o player só guarda o que vai tocar
+
+`/pcm/<nome>?de=<quadro>&n=<quadros>` devolve os quadros pedidos como um **WAV
+pequeno e completo**. O player pede blocos de 3 s, mantém 6 s à frente e joga
+fora o que já passou.
+
+| | 0.4.1 | agora |
+|---|---|---|
+| Memória de mídia, 18 stems | ~175 MB e crescendo | ~36 MB, fixo |
+| Faixas mudas | 11 de 18 | nenhuma |
+| Cresce com a duração da música | sim | não |
+
+O player não precisa entender formato nenhum: manda o que chegou para o
+`decodeAudioData` do próprio navegador. Quem entende WAV e AIFF é `wav.js`, no
+Node — onde dá para testar com um script comum, e é o que o teste de fumaça faz
+no Windows a cada push.
+
+**MP3, M4A, FLAC e OGG continuam no `<audio>`.** Já são comprimidos e não chegam
+perto do orçamento — e são justamente os que não dá para cortar sem um decoder.
+A divisão cai certa: o formato que sofre é o que sabemos cortar.
+
+### De brinde: o sincronismo deixou de ser aproximado
+
+Cada bloco é agendado pelo relógio do `AudioContext`, que é o relógio do próprio
+conversor. As faixas não derivam entre si **nem uma amostra** — o laço de
+correção de deriva sobrou só para as faixas comprimidas, que ainda são `<audio>`.
+
+Verificado comparando a saída de um canal, amostra a amostra, com o arquivo
+original: erro **exatamente zero** em 93 trechos seguidos, e deslocamento
+constante entre canais diferentes. (O deslocamento de 8192 amostras que aparece
+na medida é a latência do `ScriptProcessorNode` usado para escutar, não da
+reprodução.)
 
 ---
 

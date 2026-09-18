@@ -20,6 +20,7 @@
 !/server.js
 !/osc.js
 !/mixer-state.js
+!/wav.js
 !/public/
 !/scripts/
 !/build/

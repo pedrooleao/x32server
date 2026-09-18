@@ -5,7 +5,14 @@ const master = ctx.createGain();
 master.connect(ctx.destination);
 
 let tracks = [];
-let leader = null;      // elemento <audio> que serve de relogio
+// O relogio da musica e' o do AudioContext, nao o de um elemento <audio>.
+// Os blocos de PCM sao agendados por ele, entao as faixas nao derivam entre si.
+const relogio = { base: 0, t0: 0, tocando: false };
+
+function posicao() {
+  if (!relogio.tocando) return relogio.base;
+  return Math.min(duration, relogio.base + (ctx.currentTime - relogio.t0));
+}
 let duration = 0;
 let workletReady = false;
 let scrubbing = false;
@@ -512,17 +519,21 @@ function applyDyn(t, d) {
 // MediaElementSource segura o elemento de audio enquanto estiver conectado.
 function limparFaixas() {
   for (const t of tracks) {
-    try { t.audio.pause(); } catch (e) { /* elemento ja descartado */ }
+    if (t.pcm) window.Pcm.calar(t.pcm);
+    if (t.audio) { try { t.audio.pause(); } catch (e) { /* elemento ja descartado */ } }
     for (const no of [t.src, t.trim, t.hp1, t.hp2, t.gate, ...t.eq, t.comp, t.makeup, t.gain, t.pan, ...(t.envio || []), t.analyser]) {
       if (no) { try { no.disconnect(); } catch (e) { /* ja desconectado */ } }
     }
-    t.audio.removeAttribute('src');
-    t.audio.load();
+    if (t.audio) {
+      t.audio.removeAttribute('src');
+      t.audio.load();
+    }
     if (t.revogar) URL.revokeObjectURL(t.url);
   }
 
   tracks = [];
-  leader = null;
+  relogio.base = 0;
+  relogio.tocando = false;
   duration = 0;
 
   el('strips').innerHTML = '';
@@ -594,16 +605,38 @@ function receberPasta(msg) {
   }
 }
 
+// Reparte os stems entre as portas que a mesa abriu.
+//
+// O navegador abre no maximo 6 conexoes por origem, e origem inclui a PORTA.
+// Um <audio> tocando segura a conexao dele o tempo todo, entao com 18 stems
+// numa porta so, 12 ficavam sem conexao: relogio andando, buffer parado em 3 s
+// e o canal saindo mudo. Espalhados por 7 portas, cada uma fica com 5.
+//
+// Se a mesa nao conseguiu abrir porta nenhuma, cai no caminho antigo — mesma
+// porta para todo mundo, que e' o que sempre funcionou com poucas faixas.
+function origemDoStem(i, portas, porOrigem) {
+  if (!portas || portas.length < 2) return '';
+  const porta = portas[Math.min(Math.floor(i / porOrigem), portas.length - 1)];
+  if (String(porta) === location.port) return '';
+  return `${location.protocol}//${location.hostname}:${porta}`;
+}
+
 function carregarPastaLembrada() {
   if (!pastaLembrada || !pastaLembrada.arquivos.length) return;
+  const portas = pastaLembrada.portas;
+  const porOrigem = pastaLembrada.porOrigem || 5;
   carregar(
-    pastaLembrada.arquivos.map((nome) => ({
-      nome,
-      // Servido pela propria mesa, com Range: o <audio> le aos poucos e a barra
-      // de tempo continua funcionando.
-      url: `/stems/${encodeURIComponent(nome)}`,
-      revogar: false,
-    }))
+    pastaLembrada.arquivos.map((nome, i) => {
+      const base = origemDoStem(i, portas, porOrigem);
+      return {
+        nome,
+        base,
+        // O arquivo inteiro, para quem precisar dele de uma vez: as faixas
+        // comprimidas, que continuam no <audio>, e a exportacao acelerada.
+        url: `${base}/stems/${encodeURIComponent(nome)}`,
+        revogar: false,
+      };
+    })
   );
 }
 
@@ -892,7 +925,7 @@ async function exportarTempoReal() {
   await new Promise((resolve) => {
     const vigia = setInterval(() => {
       if (!gravador) { clearInterval(vigia); resolve(); return; }
-      const pos = leader ? leader.currentTime : 0;
+      const pos = posicao();
       const falta = Math.max(0, duration - pos);
       el('expbarra').style.width = `${Math.min(100, (pos / duration) * 100)}%`;
       el('expestado').textContent =
@@ -1001,8 +1034,26 @@ async function carregar(itens) {
   let prontos = 0;
   const abertos = await Promise.all(
     files.map(async (file) => {
+      // Caminho preferido: a mesa corta o arquivo em blocos e o player so
+      // guarda os proximos segundos. E' o que faz 18 stems de 24 bits caberem.
+      if (file.base !== undefined) {
+        const pcm = await window.Pcm.abrirPcm(file.base, file.nome);
+        if (pcm) {
+          prontos++;
+          setLoaderText(`Abrindo ${prontos} de ${files.length}…`);
+          return { file, pcm, url: file.url };
+        }
+      }
+
+      // Comprimido (MP3, M4A, FLAC, OGG) ou pasta escolhida a mao: <audio>.
+      // Sao poucos MB por faixa, longe do orcamento de memoria de midia.
       const audio = new Audio();
       const url = file.url;
+      // Stem vindo de porta vizinha e' cross-origin: sem isso a Web Audio trata
+      // o audio como "sujo" e o canal sai mudo, sem erro nenhum na tela.
+      if (/^https?:/.test(url) && !url.startsWith(location.origin)) {
+        audio.crossOrigin = 'anonymous';
+      }
       audio.src = url;
       audio.preload = 'auto';
 
@@ -1027,13 +1078,15 @@ async function carregar(itens) {
   setLoaderText(`Montando os canais…`);
 
   for (const aberto of abertos) {
-    const { file, audio, url } = aberto;
+    const { file, audio, pcm, url } = aberto;
     if (aberto.erro) {
       falhas.push(file.nome);
       continue;
     }
 
-    const src = ctx.createMediaElementSource(audio);
+    // Nos dois casos a cadeia e' a mesma daqui para frente. Com blocos, `src`
+    // e' so o ponto onde cada pedaco entra.
+    const src = audio ? ctx.createMediaElementSource(audio) : ctx.createGain();
     const gate = workletReady
       ? new AudioWorkletNode(ctx, 'gate-processor', {
           channelCount: 2,
@@ -1085,7 +1138,8 @@ async function carregar(itens) {
 
     const faixa = {
       name: file.nome.replace(/\.[^.]+$/, '').slice(0, 12),
-      audio,
+      audio: audio || null,
+      pcm: pcm || null,
       url,
       revogar: file.revogar,
       src,
@@ -1114,7 +1168,7 @@ async function carregar(itens) {
     // logo depois religa se a mesa estiver em POST.
     religarDinamica(faixa, 0);
 
-    duration = Math.max(duration, audio.duration || 0);
+    duration = Math.max(duration, (pcm ? pcm.duracao : audio.duration) || 0);
     setLoaderText(`Montando canal ${tracks.length} de ${files.length}…`);
   }
 
@@ -1123,7 +1177,8 @@ async function carregar(itens) {
     return;
   }
 
-  leader = tracks[0].audio;
+  relogio.base = 0;
+  relogio.tocando = false;
   buildStrips();
   el('loader').classList.add('hidden');
   el('deck').classList.remove('hidden');
@@ -1168,29 +1223,82 @@ function setLoaderText(txt) {
 // Transporte
 // ---------------------------------------------------------------------------
 function playing() {
-  return leader && !leader.paused;
+  return relogio.tocando;
 }
 
 async function play() {
+  if (!tracks.length) return;
   await ctx.resume();
-  // Alinha todos antes de soltar, senao cada um arranca de onde parou.
-  const pos = leader.currentTime;
-  for (const t of tracks) t.audio.currentTime = pos;
-  await Promise.all(tracks.map((t) => t.audio.play()));
+
+  // Tocar com a musica ja andando e' pedido de realinhamento, nao de voltar ao
+  // ponto onde este trecho comecou: guarda onde esta e joga fora o que estava
+  // agendado, senao o novo agendamento convive com o antigo.
+  if (relogio.tocando) {
+    relogio.base = posicao();
+    for (const t of tracks) if (t.pcm) window.Pcm.calar(t.pcm);
+  }
+  // O relogio fica parado enquanto o primeiro bloco nao chega, para que o laco
+  // de 50 ms nao agende nada contra uma largada que ainda vai mudar.
+  relogio.tocando = false;
+
+  // No fim da musica, tocar recomeca do zero.
+  if (relogio.base >= duration - 0.05) relogio.base = 0;
+  const pos = relogio.base;
+
+  // Busca o primeiro bloco de cada faixa ANTES de marcar a largada. Sem isso a
+  // primeira faixa a ficar pronta comeca antes das outras e o arranque sai
+  // desalinhado — justamente o que o relogio do AudioContext evita depois.
+  await Promise.allSettled(
+    tracks.filter((t) => t.pcm).map((t) => window.Pcm.primeiroBloco(ctx, t.pcm, pos))
+  );
+
+  for (const t of tracks) {
+    if (t.audio) { try { t.audio.currentTime = pos; } catch (e) { /* ainda sem metadados */ } }
+  }
+
+  relogio.t0 = ctx.currentTime + 0.05;
+  relogio.tocando = true;
+  bombear();
+
+  // allSettled, nao all: a promessa de play() de uma faixa que nao conseguiu
+  // dado nenhum pode nunca resolver, e com Promise.all isso pendurava o botao
+  // inteiro — as outras 17 tocando e a tela ainda escrito "Tocar".
+  await Promise.allSettled(tracks.filter((t) => t.audio).map((t) => t.audio.play()));
   el('playbtn').textContent = 'Pausar';
   sendTape(2);
 }
 
 function pause() {
-  for (const t of tracks) t.audio.pause();
+  relogio.base = posicao();
+  relogio.tocando = false;
+  for (const t of tracks) {
+    if (t.audio) t.audio.pause();
+    if (t.pcm) window.Pcm.calar(t.pcm);
+  }
   el('playbtn').textContent = 'Tocar';
   sendTape(1);
 }
 
 function seek(pos) {
-  const clamped = Math.max(0, Math.min(pos, duration));
-  for (const t of tracks) t.audio.currentTime = clamped;
+  const alvo = Math.max(0, Math.min(pos, duration));
+  relogio.base = alvo;
+  relogio.t0 = ctx.currentTime;
+  for (const t of tracks) {
+    if (t.pcm) window.Pcm.calar(t.pcm);          // o que estava agendado nao vale mais
+    if (t.audio) { try { t.audio.currentTime = alvo; } catch (e) { /* ainda sem metadados */ } }
+  }
+  if (relogio.tocando) bombear();
   paintTime();
+}
+
+// Mantem cada faixa com alguns segundos agendados a frente. Roda sozinho
+// enquanto a musica toca.
+function bombear() {
+  if (!relogio.tocando) return;
+  for (const t of tracks) {
+    if (!t.pcm) continue;
+    window.Pcm.alimentar(ctx, t.pcm, t.src, relogio.t0, relogio.base);
+  }
 }
 
 function sendTape(v) {
@@ -1203,8 +1311,8 @@ el('stopbtn').addEventListener('click', () => {
   seek(0);
   sendTape(0);
 });
-el('back10').addEventListener('click', () => seek(leader.currentTime - 10));
-el('fwd10').addEventListener('click', () => seek(leader.currentTime + 10));
+el('back10').addEventListener('click', () => seek(posicao() - 10));
+el('fwd10').addEventListener('click', () => seek(posicao() + 10));
 
 // Barra de posicao: clicar ou arrastar em qualquer ponto da musica
 const bar = el('bar');
@@ -1232,8 +1340,8 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     playing() ? pause() : play();
   }
-  if (e.code === 'ArrowLeft') seek(leader.currentTime - 5);
-  if (e.code === 'ArrowRight') seek(leader.currentTime + 5);
+  if (e.code === 'ArrowLeft') seek(posicao() - 5);
+  if (e.code === 'ArrowRight') seek(posicao() + 5);
 });
 
 // ---------------------------------------------------------------------------
@@ -1290,8 +1398,8 @@ function fmt(s) {
 }
 
 function paintTime() {
-  if (!leader) return;
-  const pos = leader.currentTime;
+  if (!tracks.length) return;
+  const pos = posicao();
   el('time').textContent = `${fmt(pos)} / ${fmt(duration)}`;
   if (duration) el('fill').style.width = `${(pos / duration) * 100}%`;
 }
@@ -1346,16 +1454,46 @@ setInterval(() => {
   if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'meters', values, gr }));
   if (!scrubbing) paintTime();
 
-  // Elementos <audio> derivam alguns ms entre si. Acima de 40 ms ja se ouve
-  // flam na bateria, entao realinhamos pelo relogio da primeira faixa.
   if (playing()) {
-    const ref = leader.currentTime;
+    // Agenda os proximos blocos das faixas sem compressao.
+    bombear();
+
+    if (posicao() >= duration - 0.02) {
+      pause();
+      relogio.base = duration;
+    }
+
+    // Faixas comprimidas continuam num <audio>, e elementos <audio> derivam
+    // alguns ms do relogio. Acima de 40 ms ja se ouve flam na bateria.
+    //
+    // Mas escrever currentTime e' um SALTO: cancela o download em curso e
+    // comeca outro. Numa faixa que ficou sem dado, a correcao chegava a cada
+    // 50 ms e cancelava o proprio download que a salvaria — 47 mil pedidos
+    // abortados em dois minutos e a faixa muda para sempre. Entao: dentro do
+    // que ja esta em memoria corrige na hora, que sai de graca; fora dele, no
+    // maximo uma vez por segundo.
+    const ref = posicao();
     for (const t of tracks) {
-      if (t.audio === leader) continue;
-      if (Math.abs(t.audio.currentTime - ref) > 0.04) t.audio.currentTime = ref;
+      if (!t.audio) continue;
+      if (Math.abs(t.audio.currentTime - ref) <= 0.04) continue;
+
+      const naMemoria = t.audio.readyState >= 3 && temDado(t.audio, ref);
+      if (!naMemoria && agora - (t.ultimoSalto || 0) < 1000) continue;
+
+      t.ultimoSalto = agora;
+      t.audio.currentTime = ref;
     }
   }
 }, 50);
+
+// O ponto ja esta carregado? Saltar para dentro do que esta em memoria nao
+// custa pedido nenhum; saltar para fora dispara um novo download.
+function temDado(audio, pos) {
+  for (let i = 0; i < audio.buffered.length; i++) {
+    if (pos >= audio.buffered.start(i) && pos < audio.buffered.end(i)) return true;
+  }
+  return false;
+}
 
 el('ip').textContent = location.hostname;
 connect();

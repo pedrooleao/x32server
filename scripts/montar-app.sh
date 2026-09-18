@@ -36,7 +36,7 @@ $COPIAR "$RAIZ/node_modules/electron/dist/Electron.app" "$MONTAGEM"
 echo "2/7  colocando o codigo da mesa"
 REC="$MONTAGEM/Contents/Resources"
 mkdir -p "$REC/app"
-for f in main.js server.js osc.js mixer-state.js package.json; do
+for f in main.js server.js osc.js mixer-state.js wav.js package.json; do
   $COPIAR "$RAIZ/$f" "$REC/app/$f"
 done
 $COPIAR "$RAIZ/public" "$REC/app/public"

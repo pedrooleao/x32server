@@ -31,7 +31,7 @@ unzip -q "$ZIP_ELECTRON" -d "$PASTA"
 echo "2/5  colocando o codigo da mesa"
 APP="$PASTA/resources/app"
 mkdir -p "$APP/node_modules"
-for f in main.js server.js osc.js mixer-state.js package.json; do
+for f in main.js server.js osc.js mixer-state.js wav.js package.json; do
   cp "$RAIZ/$f" "$APP/$f"
 done
 cp -R "$RAIZ/public" "$APP/public"

@@ -65,8 +65,9 @@ no zero (exporte do Logic com "All tracks", mesma região).
 
 WAV, AIFF, MP3, M4A (AAC), FLAC e OGG funcionam. Até 32 canais.
 
-As faixas são lidas aos poucos, não carregadas inteiras na memória: uma música
-de 12 minutos com 17 stems funciona sem estourar a RAM.
+As faixas são lidas aos poucos, não carregadas inteiras na memória: a mesa manda
+só os próximos segundos de cada canal. Vinte stems de 24 bits numa música longa
+gastam algumas dezenas de MB, e não crescem conforme a música anda.
 
 ## O que a mesa responde
 
@@ -161,6 +162,12 @@ esteve aberto.
 **Uma janela só.** Duas janelas com a música carregada tocam o dobro. As duas
 recebem o controle, mas cada uma toca por conta própria.
 
+**A mesa abre mais de uma porta.** Além da 8080 do player, ela escuta da 8081 à
+8086 só para mandar o áudio. É o navegador que obriga: ele abre no máximo seis
+conexões por porta, e com vinte canais numa porta só metade das faixas ficava
+sem receber áudio — tocando mudas, sem aviso nenhum. O firewall pergunta uma vez
+só, pelo aplicativo inteiro.
+
 ## Se der problema
 
 **O tablet não conecta** — confira que os dois estão na mesma rede Wi-Fi e que o
@@ -184,6 +191,10 @@ X32-Edit, outro emulador, ou outra cópia deste app.
 
 **O som some quando a janela fica atrás de outra** — mantenha a janela visível.
 O navegador estrangula temporizadores em janelas de fundo.
+
+**Alguns canais tocam mudos** — não deve mais acontecer, mas se acontecer é
+sinal de que as portas 8081 a 8086 não subiram. Rode pelo Terminal com
+`npm start`: a mesa diz na partida em que portas está mandando os stems.
 
 ## Rodar a partir do código
 

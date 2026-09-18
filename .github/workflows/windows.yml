@@ -52,7 +52,7 @@ jobs:
 
           $app = "$pasta/resources/app"
           New-Item -ItemType Directory -Force -Path "$app/node_modules" | Out-Null
-          foreach ($f in 'main.js','server.js','osc.js','mixer-state.js','package.json') {
+          foreach ($f in 'main.js','server.js','osc.js','mixer-state.js','wav.js','package.json') {
             Copy-Item $f "$app/$f"
           }
           Copy-Item 'public' "$app/public" -Recurse

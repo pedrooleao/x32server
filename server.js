@@ -9,10 +9,22 @@ const { EventEmitter } = require('events');
 const { WebSocketServer } = require('ws');
 
 const osc = require('./osc');
+const wav = require('./wav');
 const { MixerState, CH_COUNT, faderToGain } = require('./mixer-state');
 
 const OSC_PORT = 10023;      // porta do X32
 const HTTP_PORT = 8080;
+
+// O Chrome abre no maximo 6 conexoes simultaneas por origem (host:porta), e um
+// <audio> que esta tocando segura a sua. Com 18 stems, 12 ficavam sem conexao:
+// tocavam mudos, com o relogio andando e o buffer parado — o "travando".
+//
+// Origem, para o navegador, e' esquema+host+PORTA. Entao a mesa escuta tambem
+// em portas vizinhas e os stems sao repartidos entre elas. Alias de loopback
+// (127.0.0.2 e afins) seriam mais limpos, mas o macOS so responde por 127.0.0.1
+// sem um alias criado com sudo.
+const STEMS_POR_ORIGEM = 5;  // folga de 1 para a pagina, o websocket e o export
+const PORTAS_EXTRAS = 6;     // 7 origens x 5 = 35 canais, acima dos 32 da mesa
 const CONSOLE_NAME = process.env.MESA_NAME || 'Mesa-Playback';
 const FIRMWARE = '4.06';
 const MODEL = 'X32';
@@ -297,6 +309,7 @@ try {
 
 function lembrarPasta(dir) {
   pastaStems = dir;
+  cabecalhos.clear();
   try {
     fs.writeFileSync(ARQ_CONFIG, JSON.stringify({ pasta: dir }, null, 2));
   } catch (err) {
@@ -324,7 +337,7 @@ function descreverPasta() {
   } catch {
     return { pasta: null, nome: null, arquivos: [] };
   }
-  return { pasta: pastaStems, nome: path.basename(pastaStems), arquivos: arquivos.slice(0, CH_COUNT) };
+  return { pasta: pastaStems, nome: path.basename(pastaStems), arquivos: arquivos.slice(0, CH_COUNT), portas: portasDeAudio(), porOrigem: STEMS_POR_ORIGEM };
 }
 
 function servirStem(req, res, nome) {
@@ -346,6 +359,12 @@ function servirStem(req, res, nome) {
   }
 
   const tipo = MIME_AUDIO[path.extname(full).toLowerCase()] || 'application/octet-stream';
+  // Sem Access-Control-Allow-Origin, um stem vindo de porta vizinha "suja" o
+  // MediaElementAudioSourceNode e o canal sai mudo, sem erro nenhum na tela.
+  const cors = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Expose-Headers': 'Content-Range, Content-Length, Accept-Ranges',
+  };
   const faixa = req.headers.range && /bytes=(\d*)-(\d*)/.exec(req.headers.range);
   if (faixa) {
     const ini = faixa[1] ? parseInt(faixa[1], 10) : 0;
@@ -355,6 +374,7 @@ function servirStem(req, res, nome) {
       return;
     }
     res.writeHead(206, {
+      ...cors,
       'Content-Type': tipo,
       'Content-Length': fim - ini + 1,
       'Content-Range': `bytes ${ini}-${fim}/${st.size}`,
@@ -364,12 +384,109 @@ function servirStem(req, res, nome) {
     return;
   }
 
-  res.writeHead(200, { 'Content-Type': tipo, 'Content-Length': st.size, 'Accept-Ranges': 'bytes' });
+  res.writeHead(200, { ...cors, 'Content-Type': tipo, 'Content-Length': st.size, 'Accept-Ranges': 'bytes' });
   fs.createReadStream(full).pipe(res);
+}
+
+// ---------------------------------------------------------------------------
+// Pedacos de PCM: /pcm/<nome> e /pcm/<nome>?de=<quadro>&n=<quadros>
+//
+// Sem parametros responde o formato do arquivo. Com eles, corta os quadros
+// pedidos e devolve um WAV pequeno e completo — o player manda direto para o
+// decodificador do navegador, sem precisar entender formato nenhum.
+//
+// E' isto que substitui o <audio> nas faixas sem compressao. Um <audio> guarda
+// a musica inteira desde o inicio; com 18 stems de 24 bits isso passa do
+// orcamento de memoria de midia do Chrome e metade das faixas fica muda. Pedindo
+// aos pedacos, o player guarda so os proximos segundos de cada faixa.
+// ---------------------------------------------------------------------------
+const cabecalhos = new Map();   // caminho -> formato, para nao reabrir a cada pedaco
+
+function formatoDe(full) {
+  if (!cabecalhos.has(full)) cabecalhos.set(full, wav.lerCabecalho(full));
+  return cabecalhos.get(full);
+}
+
+function caminhoDoStem(res, nome) {
+  if (!pastaStems) {
+    res.writeHead(404).end('Nenhuma pasta lembrada');
+    return null;
+  }
+  const full = path.join(pastaStems, nome);
+  if (!full.startsWith(pastaStems) || !EXT_AUDIO.test(full)) {
+    res.writeHead(403).end('Acesso negado');
+    return null;
+  }
+  if (!fs.existsSync(full)) {
+    res.writeHead(404).end('Nao encontrado');
+    return null;
+  }
+  return full;
+}
+
+function servirPcm(req, res, nome, busca) {
+  const cors = { 'Access-Control-Allow-Origin': '*' };
+  const full = caminhoDoStem(res, nome);
+  if (!full) return;
+
+  let info;
+  try {
+    info = formatoDe(full);
+  } catch {
+    info = null;
+  }
+  if (!info) {
+    // MP3, M4A, FLAC, OGG: ja sao comprimidos e nao ocupam memoria a ponto de
+    // atrapalhar. O player usa <audio> neles, como sempre usou.
+    res.writeHead(415, cors).end('Sem PCM para cortar');
+    return;
+  }
+
+  if (!busca.has('de')) {
+    res.writeHead(200, { ...cors, 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      taxa: info.taxa, canais: info.canais, bits: info.bits,
+      quadros: info.quadros, duracao: info.duracao,
+    }));
+    return;
+  }
+
+  const de = Math.max(0, Math.min(parseInt(busca.get('de'), 10) || 0, info.quadros));
+  const pedidos = Math.max(0, parseInt(busca.get('n'), 10) || 0);
+  const n = Math.min(pedidos, info.quadros - de);
+
+  res.writeHead(200, {
+    ...cors,
+    'Content-Type': 'audio/wav',
+    'Content-Length': 44 + n * info.bytesPorQuadro,
+    'Cache-Control': 'no-store',
+  });
+  res.write(wav.cabecalhoWav(info, n));
+  if (n === 0) {
+    res.end();
+    return;
+  }
+
+  const inicio = info.inicio + de * info.bytesPorQuadro;
+  const leitura = fs.createReadStream(full, { start: inicio, end: inicio + n * info.bytesPorQuadro - 1 });
+  if (info.bigEndian) {
+    // AIFF: as amostras vem ao contrario do que o WAV espera.
+    leitura.on('data', (b) => res.write(wav.inverterBytes(b, info.bits / 8)));
+    leitura.on('end', () => res.end());
+    res.on('close', () => leitura.destroy());
+    return;
+  }
+  leitura.pipe(res);
 }
 
 const server = http.createServer((req, res) => {
   const url = req.url.split('?')[0];
+
+  if (url.startsWith('/pcm/')) {
+    const busca = new URLSearchParams(req.url.split('?')[1] || '');
+    servirPcm(req, res, decodeURIComponent(url.slice('/pcm/'.length)), busca);
+    return;
+  }
 
   if (url === '/stems') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -533,6 +650,59 @@ server.on('error', (err) => {
 });
 
 server.listen(HTTP_PORT);
+
+// ---------------------------------------------------------------------------
+// Portas vizinhas so para os stems
+//
+// Cada uma e' uma origem diferente aos olhos do navegador, e portanto ganha o
+// seu proprio limite de 6 conexoes. A pagina pergunta quais subiram e reparte
+// as faixas entre elas.
+//
+// Nao sao obrigatorias: se nenhuma subir, tudo continua saindo pela 8080 como
+// antes — com muitos stems algumas faixas ficam mudas, mas nada quebra.
+// ---------------------------------------------------------------------------
+const portasAbertas = [];
+
+function portasDeAudio() {
+  return [HTTP_PORT, ...portasAbertas];
+}
+
+function abrirPortasDeStems() {
+  let candidata = HTTP_PORT + 1;
+  const limite = HTTP_PORT + 40;   // desiste em vez de varrer a maquina inteira
+
+  function proxima() {
+    if (portasAbertas.length >= PORTAS_EXTRAS || candidata > limite) {
+      if (portasAbertas.length) {
+        console.log(`Stems tambem em ${portasAbertas.join(', ')} (o navegador so abre 6 conexoes por porta)`);
+      }
+      return;
+    }
+    const porta = candidata++;
+    const extra = http.createServer((req, res) => {
+      const url = req.url.split('?')[0];
+      if (url.startsWith('/pcm/')) {
+        const busca = new URLSearchParams(req.url.split('?')[1] || '');
+        servirPcm(req, res, decodeURIComponent(url.slice('/pcm/'.length)), busca);
+        return;
+      }
+      if (url.startsWith('/stems/')) {
+        servirStem(req, res, decodeURIComponent(url.slice('/stems/'.length)));
+        return;
+      }
+      res.writeHead(404).end('Aqui so saem stems');
+    });
+    extra.on('error', () => proxima());        // ocupada: tenta a seguinte
+    extra.listen(porta, () => {
+      portasAbertas.push(porta);
+      proxima();
+    });
+  }
+
+  proxima();
+}
+
+abrirPortasDeStems();
 
 // ---------------------------------------------------------------------------
 // Medidores: o navegador manda RMS por canal, repassamos no formato do X32
