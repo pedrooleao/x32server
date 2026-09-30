@@ -77,6 +77,7 @@ gastam algumas dezenas de MB, e não crescem conforme a música anda.
 | Mute | ok |
 | Solo | ok — *solo in place*, veja abaixo |
 | Pan | ok |
+| Inversão de fase (Ø) | ok — no preamp, antes do low cut |
 | Ganho de preamp | ok — -12 a +60 dB |
 | Trim de entrada | ok — -18 a +18 dB |
 | EQ de 4 bandas | ok — LCut, LShv, PEQ, HShv, HCut |
@@ -89,16 +90,19 @@ gastam algumas dezenas de MB, e não crescem conforme a música anda.
 | Nome e cor do canal | ok |
 | Transporte | play, pause, stop, ±10s, seek na barra, teclado |
 | Delay (bus 1) e Reverb (bus 2) | ok — envio por canal, retorno pelo fader do bus |
+| Retorno do músico (bus 3 e 4) | ok — bus 3 pré-fader, bus 4 pós-fader |
+| Mix PA × mix do músico | ok — dá para trocar a escuta e comparar |
 | Demais envios para bus | guardam o valor, não roteiam áudio |
 | Cenas e snapshots | não |
 
 Cada canal roda a cadeia na mesma ordem da mesa real:
 
 ```
-stem → ganho → low cut → gate → EQ → compressor → fader → pan → LR
-                                                      │
-                                                      └─→ envios → Delay (bus 1)
-                                                                 → Reverb (bus 2)
+stem → ganho → Ø → low cut → gate → EQ → compressor → mute ─┬─→ fader → pan → LR
+                                                            │           │
+                                             bus 3, PRÉ ◀───┘           ├─→ Delay (bus 1)
+                                                                        ├─→ Reverb (bus 2)
+                                                                        └─→ bus 4, PÓS
 ```
 
 ## Exportar a mixagem do aluno
@@ -121,6 +125,52 @@ Em navegador antigo, sem codificador próprio, o app cai para a gravação em te
 real — aí a música toca inteira e você precisa esperar. Nesse caso, deixe a
 janela na frente: o sistema reduz a prioridade de janelas de fundo e isso pode
 desalinhar as faixas no meio da gravação.
+
+## Mix da casa e mix do músico
+
+O app toca **um** mix de cada vez, e você escolhe qual — os botões
+**PA**, **Músico pré** e **Músico pós**, logo acima dos canais. Trocar só muda o
+que sai na caixa: nenhum ajuste da mesa se altera, que é o ponto de poder
+comparar os dois na hora.
+
+O retorno do músico se monta como em qualquer console: **o envio de cada canal
+para o bus 3 ou 4** decide o que ele ouve, e **o fader do bus** decide o volume
+do retorno. Os dois buses recebem os mesmos envios, mas tapados em pontos
+diferentes da tira de canal:
+
+| | Bus 3 — **pré-fader** | Bus 4 — **pós-fader** |
+|---|---|---|
+| Fader do canal | não muda o retorno | derruba o retorno junto |
+| Mute do canal | cala | cala |
+| EQ, gate, compressor | vão para o retorno | vão para o retorno |
+
+**É essa diferença que só se explica ouvindo.** Monte o mesmo retorno nos dois
+buses, baixe o fader de um canal na mesa e alterne entre "Músico pré" e
+"Músico pós": no pré o músico continua ouvindo o instrumento, no pós ele
+desaparece junto com a casa. É por isso que retorno de palco se manda
+pré-fader — o operador mexe no som da casa sem estragar o do palco.
+
+Duas coisas que valem saber:
+
+- Os retornos **não levam delay nem reverb**. Aqui não existe um canal de
+  retorno de efeito para mandar ao palco, como haveria numa mesa de verdade.
+- **Mute cala tudo**, inclusive o envio pré-fader. Numa mesa você às vezes
+  consegue separar as duas coisas; aqui não, e a regra fica mais simples de
+  explicar: fader é só da casa, mute é de todo mundo.
+
+**Exportar leva em conta a escuta.** Com "Músico pré" selecionado, o botão diz
+*Exportar mix Músico pré* e o arquivo sai com o nome do mix — então dá para
+mandar os dois e comparar depois.
+
+## A fase
+
+O botão **Ø** do canal inverte a fase de verdade, no preamp, antes do low cut e
+do EQ — o mesmo lugar da X32.
+
+Serve para o exercício clássico: dois microfones no mesmo tambor. Com os dois
+microfones de bumbo desta música abertos e mais nada, inverter um derruba
+**cerca de 10 dB** do grave. Os canais com a fase invertida mostram um **Ø** ao
+lado do nome.
 
 ## Os dois efeitos
 
@@ -237,7 +287,8 @@ verdade tudo abaixo funciona.
   não há roteamento de sidechain.
 - **Mix da dinâmica** (compressão paralela) — sempre 100% processado.
 - **Filtro de sidechain** do gate e do compressor.
-- **Envios para bus e mix de monitor** — guardam o valor, não roteiam áudio.
+- **Envios para os buses 5 a 16** — guardam o valor, não roteiam áudio. Os
+  buses 1 a 4 funcionam: dois de efeito e dois de retorno.
 - **Cenas e snapshots.**
 
 **Controles que funcionam, mas diferente da mesa real:**

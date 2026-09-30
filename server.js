@@ -10,7 +10,7 @@ const { WebSocketServer } = require('ws');
 
 const osc = require('./osc');
 const wav = require('./wav');
-const { MixerState, CH_COUNT, faderToGain } = require('./mixer-state');
+const { MixerState, CH_COUNT, BUS_USADOS, faderToGain } = require('./mixer-state');
 
 const OSC_PORT = 10023;      // porta do X32
 const HTTP_PORT = 8080;
@@ -605,8 +605,9 @@ function pushToBrowser(address, written) {
       channel = {
         num, eq: c.eq, gate: c.gate, dyn: c.dyn, trim: c.trim, ha: c.gain,
         hp: { on: c.hpon, slope: c.hpslope, f: c.hpf },
-        sends: c.sends.slice(0, 2),
-        sendsOn: c.sendsOn.slice(0, 2),
+        invert: c.invert,
+        sends: c.sends.slice(0, BUS_USADOS),
+        sendsOn: c.sendsOn.slice(0, BUS_USADOS),
       };
     }
   }
@@ -615,11 +616,12 @@ function pushToBrowser(address, written) {
   // ligar o solo do canal 3 cala os outros 31. Entao mandamos o quadro inteiro.
   const solos = soloMatch ? state.channels.map((c) => c.solo) : undefined;
 
-  // Buses 1 e 2 sao os retornos de efeito, e /fx/... e' o ajuste dos efeitos.
-  // Nos dois casos o navegador precisa do quadro, nao de um valor solto.
-  const mexeuBus = /^\/bus\/(01|02)\//.test(address);
+  // Buses 1 e 2 sao os retornos de efeito; 3 e 4 sao o retorno do musico.
+  // E /fx/... e' o ajuste dos efeitos. Em todos o navegador precisa do quadro,
+  // nao de um valor solto.
+  const mexeuBus = /^\/bus\/(01|02|03|04)\//.test(address);
   const mexeuFx = /^\/fx\/[12]\//.test(address);
-  const buses = mexeuBus ? state.buses.slice(0, 2).map((b) => ({ fader: b.fader, on: b.on })) : undefined;
+  const buses = mexeuBus ? state.buses.slice(0, BUS_USADOS).map((b) => ({ fader: b.fader, on: b.on })) : undefined;
   const fx = mexeuFx ? state.fx : undefined;
 
   const payload = JSON.stringify({

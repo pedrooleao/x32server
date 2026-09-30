@@ -1,8 +1,37 @@
 'use strict';
 
 const ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'playback' });
+
+// A saida da caixa. Nao e' o mix da casa: e' o que foi ESCOLHIDO para escutar.
+// O mix PA e os retornos de musico chegam aqui por torneiras, e so uma abre.
+const saida = ctx.createGain();
+saida.connect(ctx.destination);
+
+// O mix da casa: fader e mute do LR, com os retornos de efeito somados nele.
 const master = ctx.createGain();
-master.connect(ctx.destination);
+
+// ---------------------------------------------------------------------------
+// Todo ajuste sobe em rampa, e o alvo fica guardado
+//
+// Rampa para nao estalar. Guardado porque `param.value` NAO e' leitura confiavel
+// do que se pediu: o valor so e' recalculado quando aquele no' esta renderizando
+// de fato, e com a musica parada um no' calado pode ficar fora do calculo. Um
+// no' recem-criado, sem ligacao, nunca se move — medido.
+//
+// Isso importa porque a exportacao monta a cadeia offline lendo esses valores:
+// ajuste feito com a musica parada ficava de fora do arquivo exportado.
+// ---------------------------------------------------------------------------
+const ALVOS = new WeakMap();
+
+function rampa(param, valor, tau = 0.02) {
+  ALVOS.set(param, valor);
+  param.setTargetAtTime(valor, ctx.currentTime, tau);
+}
+
+// O que foi pedido, nao o que o no' chegou a calcular.
+function alvoDe(param) {
+  return ALVOS.has(param) ? ALVOS.get(param) : param.value;
+}
 
 let tracks = [];
 // O relogio da musica e' o do AudioContext, nao o de um elemento <audio>.
@@ -24,10 +53,66 @@ const CLIPE_NIVEL = 0.99;
 const CLIPE_SEGURA = 1500;   // ms
 let clipeMasterAte = 0;
 
-// Saida paralela para gravar a mixagem. Fica pendurada no master, entao grava
-// exatamente o que se ouve — com fader, mute, solo, EQ, gate e compressor.
+// Saida paralela para gravar a mixagem. Fica pendurada na saida, nao no master:
+// assim grava o mix que esta sendo escutado, seja o da casa ou o do musico.
 const gravacao = ctx.createMediaStreamDestination();
-master.connect(gravacao);
+saida.connect(gravacao);
+
+// ---------------------------------------------------------------------------
+// Retorno do musico: dois buses com o mesmo destino, tapados em pontos
+// diferentes da tira de canal
+//
+// O bus 3 recebe o envio ANTES do fader do canal e o bus 4 DEPOIS. E' o par
+// que deixa ouvir a diferenca que so se explica ouvindo: o operador baixa o
+// fader da casa e o retorno PRE nao se move, enquanto o POS cai junto. E' por
+// isso que retorno de palco se manda pre-fader.
+//
+// Os dois somam so os canais. Nao levam delay nem reverb: aqui nao existe canal
+// de retorno de efeito para mandar ao palco, como haveria numa mesa de verdade.
+// ---------------------------------------------------------------------------
+const MON_PRE = 0;
+const MON_POS = 1;
+
+const monitores = [MON_PRE, MON_POS].map(() => {
+  const soma = ctx.createGain();     // onde os envios dos canais caem
+  const fader = ctx.createGain();    // o fader do bus: o quanto o musico ouve
+  soma.connect(fader);
+  return { soma, fader };
+});
+
+// ---------------------------------------------------------------------------
+// Qual mix esta na caixa
+// ---------------------------------------------------------------------------
+const MIXES = [
+  { id: 'pa', nome: 'PA', bus: null },
+  { id: 'pre', nome: 'Músico pré', bus: MON_PRE },
+  { id: 'pos', nome: 'Músico pós', bus: MON_POS },
+];
+
+for (const m of MIXES) {
+  m.fonte = m.bus === null ? master : monitores[m.bus].fader;
+  m.torneira = ctx.createGain();
+  m.torneira.gain.value = m.id === 'pa' ? 1 : 0;
+  m.fonte.connect(m.torneira).connect(saida);
+}
+
+let mixEscutado = 'pa';
+
+function mixAtual() {
+  return MIXES.find((m) => m.id === mixEscutado) || MIXES[0];
+}
+
+// Troca sem estalo: uma torneira fecha enquanto a outra abre. A troca e' so de
+// escuta — nenhum ajuste da mesa se altera, que e' o ponto de poder comparar.
+function escutarMix(id) {
+  if (!MIXES.some((m) => m.id === id)) return;
+  mixEscutado = id;
+  const agora = ctx.currentTime;
+  for (const m of MIXES) {
+    rampa(m.torneira.gain, m.id === id ? 1 : 0, 0.015);
+  }
+  pintarMixes();
+}
 
 // ---------------------------------------------------------------------------
 // Os dois efeitos: delay no bus 1, reverb no bus 2
@@ -89,9 +174,9 @@ function aplicarFx(lista) {
 
   // Delay: par 01 = tempo, par 02 = realimentacao.
   const tempo = Math.max(0.02, lista[0].par[0] * FX_TEMPO_MAX);
-  fx.linha.delayTime.setTargetAtTime(tempo, agora, 0.05);
+  rampa(fx.linha.delayTime, tempo, 0.05);
   // Ate 0.85: acima disso a realimentacao cresce sozinha e nao para mais.
-  fx.realimenta.gain.setTargetAtTime(Math.min(0.85, lista[0].par[1]), agora, 0.05);
+  rampa(fx.realimenta.gain, Math.min(0.85, lista[0].par[1]), 0.05);
 
   // Reverb: par 01 = tamanho da cauda.
   const segundos = Math.max(0.3, lista[1].par[0] * FX_CAUDA_MAX);
@@ -104,24 +189,30 @@ function aplicarFx(lista) {
 function aplicarBuses(buses) {
   if (!buses || buses.length < 2) return;
   const agora = ctx.currentTime;
-  // O fader do bus e' o quanto do efeito volta para o LR.
-  fx.faderDelay.gain.setTargetAtTime(buses[0].on ? faderToGain(buses[0].fader) : 0, agora, 0.02);
-  fx.faderReverb.gain.setTargetAtTime(buses[1].on ? faderToGain(buses[1].fader) : 0, agora, 0.02);
+  const nivel = (b) => (b && b.on ? faderToGain(b.fader) : 0);
+  // Nos buses 1 e 2 o fader e' o quanto do efeito volta para o LR. Nos 3 e 4 e'
+  // o volume do retorno — o quanto o musico ouve da mistura toda.
+  rampa(fx.faderDelay.gain, nivel(buses[0]), 0.02);
+  rampa(fx.faderReverb.gain, nivel(buses[1]), 0.02);
+  rampa(monitores[MON_PRE].fader.gain, nivel(buses[2]), 0.02);
+  rampa(monitores[MON_POS].fader.gain, nivel(buses[3]), 0.02);
 }
 
 function aplicarEnvios(t, sends, sendsOn) {
   if (!t.envio) return;
   const agora = ctx.currentTime;
-  for (let i = 0; i < 2; i++) {
+  for (let i = 0; i < t.envio.length; i++) {
     const nivel = sends && sends[i] !== undefined ? sends[i] : 0;
     const ligado = !sendsOn || sendsOn[i] === undefined || sendsOn[i] === 1;
-    t.envio[i].gain.setTargetAtTime(ligado ? faderToGain(nivel) : 0, agora, 0.02);
+    rampa(t.envio[i].gain, ligado ? faderToGain(nivel) : 0, 0.02);
   }
 }
 
+// Sonda da luz de clipe: fica na SAIDA, nao no master. Escutando o retorno do
+// musico, a luz tem de acender pelo que esta na caixa.
 const sondaMaster = ctx.createAnalyser();
 sondaMaster.fftSize = 1024;
-master.connect(sondaMaster);
+saida.connect(sondaMaster);
 const dadosMaster = new Float32Array(sondaMaster.fftSize);
 
 // ---------------------------------------------------------------------------
@@ -193,9 +284,12 @@ function handleParam({ address, value, gain, channel: msgState, solos, buses, fx
       rampGain(t);
       paintStrip(tracks.indexOf(t));
     } else if (key === 'mix/pan') {
-      t.pan.pan.setTargetAtTime((value - 0.5) * 2, ctx.currentTime, 0.02);
+      rampa(t.pan.pan, (value - 0.5) * 2, 0.02);
     } else if (key === 'preamp/trim') {
       applyTrim(t, msgState && msgState.ha, value);
+    } else if (key === 'preamp/invert') {
+      aplicarFase(t, value);
+      paintStrip(tracks.indexOf(t));
     } else if (key.startsWith('preamp/hp')) {
       if (msgState) applyHp(t, msgState.hp);
     } else if (/^mix\/\d{2}\/(level|on)$/.test(key)) {
@@ -224,6 +318,7 @@ function applyChannel(i, c) {
   t.on = c.on;
   t.solo = c.solo || 0;
   rampGain(t);
+  t.invert = c.invert ? 1 : 0;
   applyTrim(t, c.ha, c.trim);
   applyHp(t, c.hp);
   aplicarEnvios(t, c.sends, c.sendsOn);
@@ -239,7 +334,7 @@ function applyChannel(i, c) {
 const main = { fader: 0.75, on: 1 };
 
 function refreshMaster() {
-  master.gain.setTargetAtTime(main.on ? faderToGain(main.fader) : 0, ctx.currentTime, 0.02);
+  rampa(master.gain, main.on ? faderToGain(main.fader) : 0, 0.02);
 }
 
 // ---------------------------------------------------------------------------
@@ -278,7 +373,12 @@ function audivel(t) {
 }
 
 function rampGain(t) {
-  t.gain.gain.setTargetAtTime(audivel(t) ? faderToGain(t.fader) : 0, ctx.currentTime, 0.015);
+  const agora = ctx.currentTime;
+  // O fader mexe so no fader; mute e solo ficam num no' proprio, na frente
+  // dele. E' o que faz o envio pre-fader ignorar o fader e ainda obedecer ao
+  // mute — com os dois no mesmo no', uma coisa arrastava a outra.
+  rampa(t.gain.gain, faderToGain(t.fader), 0.015);
+  rampa(t.mudo.gain, audivel(t) ? 1 : 0, 0.015);
 }
 
 // Mexer no solo de UM canal muda quem se ouve em todos: liga o solo do canal 3
@@ -324,7 +424,7 @@ function applyEqAll(t, eq) {
     const active = t.eqOn === 1;
     const tipo = active ? EQ_TYPE_MAP[band.type] || 'peaking' : 'peaking';
     f.type = tipo;
-    f.frequency.setTargetAtTime(normFreq(band.f), now, 0.02);
+    rampa(f.frequency, normFreq(band.f), 0.02);
 
     // Num LCut/HCut o Q do biquad nao e' largura de banda: e' ressonancia. O
     // botao de Q da banda nao vale para cortes na X32, e usar o valor da banda
@@ -336,8 +436,8 @@ function applyEqAll(t, eq) {
     // 0.7071, o que da 20*log10(0.7071) = -3.01 aqui. Pondo 0.7071 direto sai um
     // Q linear de 1.085 e volta uma corcunda de +1.7 dB logo acima do corte.
     const corte = tipo === 'highpass' || tipo === 'lowpass';
-    f.Q.setTargetAtTime(corte ? -3.0103 : Math.max(0.0001, normQ(band.q)), now, 0.02);
-    f.gain.setTargetAtTime(active ? normEqGain(band.g) : 0, now, 0.02);
+    rampa(f.Q, corte ? -3.0103 : Math.max(0.0001, normQ(band.q)), 0.02);
+    rampa(f.gain, active ? normEqGain(band.g) : 0, 0.02);
   });
 }
 
@@ -346,9 +446,29 @@ function applyEqAll(t, eq) {
 // X32 e somam em dB. Ficam na frente de tudo, como na mesa real, entao mexer
 // neles tambem muda o quanto o gate abre e o quanto o compressor trabalha.
 function applyTrim(t, ha, trim) {
-  const dbHa = ha === undefined || ha === null ? 0 : ha * 72 - 12;
-  const dbTrim = trim === undefined || trim === null ? 0 : trim * 36 - 18;
-  t.trim.gain.setTargetAtTime(Math.pow(10, (dbHa + dbTrim) / 20), ctx.currentTime, 0.02);
+  if (ha !== undefined && ha !== null) t.ha = ha;
+  if (trim !== undefined && trim !== null) t.trimNorm = trim;
+  aplicarEntrada(t);
+}
+
+// Inversao de fase: na X32 fica no preamp, logo depois do ganho e antes do low
+// cut. Inverter e' trocar o sinal da amostra, e trocar o sinal do ganho de
+// entrada da' exatamente isso — sem no' nenhum a mais na cadeia.
+//
+// A troca sobe rampa como todo ajuste aqui, entao passa por zero: sao umas
+// dezenas de ms de queda no lugar do estalo que um pulo seco daria.
+function aplicarFase(t, invert) {
+  const novo = invert ? 1 : 0;
+  if (t.invert === novo) return;
+  t.invert = novo;
+  aplicarEntrada(t);
+}
+
+// Nivel de entrada com o sinal da fase junto.
+function aplicarEntrada(t) {
+  const db = (t.ha * 72 - 12) + (t.trimNorm * 36 - 18);
+  const modulo = Math.pow(10, db / 20);
+  rampa(t.trim.gain, t.invert ? -modulo : modulo, 0.02);
 }
 
 // Modos da secao de gate na X32, na ordem do OSC:
@@ -381,12 +501,12 @@ function applyHp(t, hp) {
   // Desligado, o par vira peaking com ganho 0: transparente, sem reconectar.
   t.hp1.type = ligado ? 'highpass' : 'peaking';
   t.hp2.type = ligado && HP_Q2[slope] !== null ? 'highpass' : 'peaking';
-  t.hp1.gain.setTargetAtTime(0, now, 0.02);
-  t.hp2.gain.setTargetAtTime(0, now, 0.02);
-  t.hp1.frequency.setTargetAtTime(hz, now, 0.02);
-  t.hp2.frequency.setTargetAtTime(hz, now, 0.02);
-  t.hp1.Q.setTargetAtTime(ligado ? HP_Q1[slope] : 0, now, 0.02);
-  t.hp2.Q.setTargetAtTime(ligado && HP_Q2[slope] !== null ? HP_Q2[slope] : 0, now, 0.02);
+  rampa(t.hp1.gain, 0, 0.02);
+  rampa(t.hp2.gain, 0, 0.02);
+  rampa(t.hp1.frequency, hz, 0.02);
+  rampa(t.hp2.frequency, hz, 0.02);
+  rampa(t.hp1.Q, ligado ? HP_Q1[slope] : 0, 0.02);
+  rampa(t.hp2.Q, ligado && HP_Q2[slope] !== null ? HP_Q2[slope] : 0, 0.02);
 }
 
 function applyGate(t, g) {
@@ -397,11 +517,11 @@ function applyGate(t, g) {
   // ratio 0 = DUCK, que nao emulamos: passa limpo.
   p.get('bypass').setValueAtTime(g.on && ratio > 0 ? 0 : 1, now);
   p.get('ratio').setValueAtTime(Math.max(1, ratio), now);
-  p.get('threshold').setTargetAtTime(normGateThr(g.thr), now, 0.02);
-  p.get('range').setTargetAtTime(normRange(g.range), now, 0.02);
-  p.get('attack').setTargetAtTime(Math.max(0.0002, normMs(g.attack)), now, 0.02);
-  p.get('hold').setTargetAtTime(normHold(g.hold), now, 0.02);
-  p.get('release').setTargetAtTime(Math.max(0.005, normRelease(g.release)), now, 0.02);
+  rampa(p.get('threshold'), normGateThr(g.thr), 0.02);
+  rampa(p.get('range'), normRange(g.range), 0.02);
+  rampa(p.get('attack'), Math.max(0.0002, normMs(g.attack)), 0.02);
+  rampa(p.get('hold'), normHold(g.hold), 0.02);
+  rampa(p.get('release'), Math.max(0.005, normRelease(g.release)), 0.02);
 }
 
 // O DynamicsCompressorNode do navegador aplica um makeup automatico proprio, que
@@ -462,19 +582,18 @@ function religarDinamica(t, pos) {
     try { no.disconnect(); } catch (e) { /* ainda nao ligado */ }
   }
 
-  // O medidor e' pre-fader: sai de quem fecha o processamento, que muda junto.
-  try { t.analyser.disconnect(); } catch (e) { /* nada ligado nele */ }
-
+  // Quem fecha o processamento muda com o PRE/POST, mas o ponto pre-fader e'
+  // sempre `t.pre`. Antes o religamento tinha de mexer tambem em quem alimenta
+  // o medidor; agora medidor e envio pre-fader ficam pendurados em `t.pre` e
+  // nao sabem que a cadeia mudou.
   if (post) {
     entrada.connect(t.eq[0]);
     t.eq[3].connect(t.comp);
-    t.makeup.connect(t.gain);
-    t.makeup.connect(t.analyser);
+    t.makeup.connect(t.pre);
   } else {
     entrada.connect(t.comp);
     t.makeup.connect(t.eq[0]);
-    t.eq[3].connect(t.gain);
-    t.eq[3].connect(t.analyser);
+    t.eq[3].connect(t.pre);
   }
 }
 
@@ -486,25 +605,25 @@ function applyDyn(t, d) {
   const ratio = on ? Math.min(20, RATIOS[d.ratio] || 3) : 1;
   const knee = on ? d.knee * 12 : 0;
 
-  t.comp.threshold.setTargetAtTime(thr, now, 0.02);
-  t.comp.ratio.setTargetAtTime(ratio, now, 0.02);
-  t.comp.knee.setTargetAtTime(knee, now, 0.02);
-  t.comp.attack.setTargetAtTime(Math.max(0.0005, normMs(d.attack)), now, 0.02);
-  t.comp.release.setTargetAtTime(Math.min(1, Math.max(0.01, normRelease(d.release))), now, 0.02);
+  rampa(t.comp.threshold, thr, 0.02);
+  rampa(t.comp.ratio, ratio, 0.02);
+  rampa(t.comp.knee, knee, 0.02);
+  rampa(t.comp.attack, Math.max(0.0005, normMs(d.attack)), 0.02);
+  rampa(t.comp.release, Math.min(1, Math.max(0.01, normRelease(d.release))), 0.02);
 
   // Marca a versao deste ajuste: a medicao e' assincrona e um giro rapido do
   // botao pode gerar varias, que voltariam fora de ordem.
   const marca = ++t.dynSeq;
 
   if (!on) {
-    t.makeup.gain.setTargetAtTime(1, now, 0.02);
+    rampa(t.makeup.gain, 1, 0.02);
     return;
   }
 
   const desejado = normMakeup(d.mgain);
   ganhoAutomaticoDoComp(thr, knee, ratio).then((automatico) => {
     if (t.dynSeq !== marca) return;
-    t.makeup.gain.setTargetAtTime(desejado / automatico, ctx.currentTime, 0.02);
+    rampa(t.makeup.gain, desejado / automatico, 0.02);
   });
 }
 
@@ -521,7 +640,7 @@ function limparFaixas() {
   for (const t of tracks) {
     if (t.pcm) window.Pcm.calar(t.pcm);
     if (t.audio) { try { t.audio.pause(); } catch (e) { /* elemento ja descartado */ } }
-    for (const no of [t.src, t.trim, t.hp1, t.hp2, t.gate, ...t.eq, t.comp, t.makeup, t.gain, t.pan, ...(t.envio || []), t.analyser]) {
+    for (const no of [t.src, t.trim, t.hp1, t.hp2, t.gate, ...t.eq, t.comp, t.makeup, t.pre, t.mudo, t.gain, t.pan, ...(t.envio || []), t.analyser]) {
       if (no) { try { no.disconnect(); } catch (e) { /* ja desconectado */ } }
     }
     if (t.audio) {
@@ -671,21 +790,24 @@ let exportando = false;
 // Somar depois da' o mesmo resultado que somar durante: as cadeias de canal sao
 // independentes ate o barramento, e o fader do LR e' so um ganho no fim.
 
+// A copia le o ALVO de cada parametro, nao o `.value`: ver o comentario de
+// `rampa`. Lendo `.value`, um ajuste feito com a musica parada nao entrava na
+// exportacao.
 function copiarBiquad(origem, destino) {
   destino.type = origem.type;
-  destino.frequency.value = origem.frequency.value;
-  destino.Q.value = origem.Q.value;
-  destino.gain.value = origem.gain.value;
+  destino.frequency.value = alvoDe(origem.frequency);
+  destino.Q.value = alvoDe(origem.Q);
+  destino.gain.value = alvoDe(origem.gain);
 }
 
-async function renderizarCanal(off, t, amostras) {
+async function renderizarCanal(off, t, amostras, mix) {
   const buf = await off.decodeAudioData(await (await fetch(t.url)).arrayBuffer());
 
   const src = off.createBufferSource();
   src.buffer = buf;
 
   const trim = off.createGain();
-  trim.gain.value = t.trim.gain.value;
+  trim.gain.value = alvoDe(t.trim.gain);   // ja traz o sinal da fase
 
   const hp1 = off.createBiquadFilter();
   const hp2 = off.createBiquadFilter();
@@ -696,7 +818,7 @@ async function renderizarCanal(off, t, amostras) {
   if (t.gate && workletReady) {
     gate = new AudioWorkletNode(off, 'gate-processor', { channelCount: 2, channelCountMode: 'explicit' });
     for (const nome of ['bypass', 'threshold', 'range', 'attack', 'hold', 'release', 'ratio']) {
-      gate.parameters.get(nome).value = t.gate.parameters.get(nome).value;
+      gate.parameters.get(nome).value = alvoDe(t.gate.parameters.get(nome));
     }
   }
 
@@ -708,34 +830,51 @@ async function renderizarCanal(off, t, amostras) {
 
   const comp = off.createDynamicsCompressor();
   for (const nome of ['threshold', 'knee', 'ratio', 'attack', 'release']) {
-    comp[nome].value = t.comp[nome].value;
+    comp[nome].value = alvoDe(t.comp[nome]);
   }
 
   const makeup = off.createGain();
-  makeup.gain.value = t.makeup.gain.value;
+  makeup.gain.value = alvoDe(t.makeup.gain);
+  const pre = off.createGain();
+  const mudo = off.createGain();
+  mudo.gain.value = alvoDe(t.mudo.gain);     // mute e solo
   const fader = off.createGain();
-  fader.gain.value = t.gain.gain.value;      // ja inclui mute e solo
+  fader.gain.value = alvoDe(t.gain.gain);
   const pan = off.createStereoPanner();
-  pan.pan.value = t.pan.pan.value;
+  pan.pan.value = alvoDe(t.pan.pan);
 
-  // Os efeitos entram aqui tambem, senao a mixagem exportada sai seca.
-  //
-  // Cada canal leva a sua propria copia do delay e do reverb, em vez de um par
-  // compartilhado. Da' no mesmo: delay e convolucao sao lineares, entao somar
-  // depois de processar e' igual a processar a soma. E e' o que permite
-  // renderizar um canal de cada vez, que e' o que segura a memoria.
-  const efeitos = construirEfeitos(off, off.destination);
-  efeitos.linha.delayTime.value = fx.linha.delayTime.value;
-  efeitos.realimenta.gain.value = fx.realimenta.gain.value;
-  efeitos.convolucao.buffer = fx.convolucao.buffer;
-  efeitos.faderDelay.gain.value = fx.faderDelay.gain.value;
-  efeitos.faderReverb.gain.value = fx.faderReverb.gain.value;
+  pre.connect(mudo).connect(fader);
 
-  const envio = [off.createGain(), off.createGain()];
-  envio[0].gain.value = t.envio[0].gain.value;
-  envio[1].gain.value = t.envio[1].gain.value;
-  fader.connect(envio[0]).connect(efeitos.entradaDelay);
-  fader.connect(envio[1]).connect(efeitos.entradaReverb);
+  if (mix.bus === null) {
+    // Mix da casa: passa pelo pan e leva os efeitos, senao sai seco.
+    //
+    // Cada canal leva a sua propria copia do delay e do reverb, em vez de um
+    // par compartilhado. Da' no mesmo: delay e convolucao sao lineares, entao
+    // somar depois de processar e' igual a processar a soma. E e' o que permite
+    // renderizar um canal de cada vez, que e' o que segura a memoria.
+    const efeitos = construirEfeitos(off, off.destination);
+    efeitos.linha.delayTime.value = alvoDe(fx.linha.delayTime);
+    efeitos.realimenta.gain.value = alvoDe(fx.realimenta.gain);
+    efeitos.convolucao.buffer = fx.convolucao.buffer;
+    efeitos.faderDelay.gain.value = alvoDe(fx.faderDelay.gain);
+    efeitos.faderReverb.gain.value = alvoDe(fx.faderReverb.gain);
+
+    const envio = [off.createGain(), off.createGain()];
+    envio[0].gain.value = alvoDe(t.envio[0].gain);
+    envio[1].gain.value = alvoDe(t.envio[1].gain);
+    fader.connect(envio[0]).connect(efeitos.entradaDelay);
+    fader.connect(envio[1]).connect(efeitos.entradaReverb);
+
+    fader.connect(pan).connect(off.destination);
+  } else {
+    // Retorno do musico: o envio do canal para aquele bus, tapado antes ou
+    // depois do fader — o mesmo ponto da cadeia ao vivo. Vai mono, como o
+    // envio de verdade, e sem efeito: os buses de retorno somam so os canais.
+    const envio = off.createGain();
+    envio.gain.value = alvoDe(t.envio[mix.bus === MON_PRE ? 2 : 3].gain);
+    const tap = mix.bus === MON_PRE ? mudo : fader;
+    tap.connect(envio).connect(off.destination);
+  }
 
   src.connect(trim).connect(hp1).connect(hp2);
   const entrada = gate ? (hp2.connect(gate), gate) : hp2;
@@ -744,13 +883,12 @@ async function renderizarCanal(off, t, amostras) {
   if (t.dynPost) {
     entrada.connect(eq[0]);
     eq[0].connect(eq[1]).connect(eq[2]).connect(eq[3]).connect(comp);
-    comp.connect(makeup).connect(fader);
+    comp.connect(makeup).connect(pre);
   } else {
     entrada.connect(comp);
     comp.connect(makeup).connect(eq[0]);
-    eq[0].connect(eq[1]).connect(eq[2]).connect(eq[3]).connect(fader);
+    eq[0].connect(eq[1]).connect(eq[2]).connect(eq[3]).connect(pre);
   }
-  fader.connect(pan).connect(off.destination);
 
   src.start();
   const saida = await off.startRendering();
@@ -762,8 +900,16 @@ async function exportarRapido() {
   const amostras = Math.ceil(duration * taxa);
   const soma = [new Float32Array(amostras), new Float32Array(amostras)];
 
-  // Canal calado por mute ou por solo alheio nao precisa ser renderizado.
-  const audiveis = tracks.filter((t) => t.gain.gain.value > 0.00002);
+  const mix = mixAtual();
+
+  // Canal calado por mute ou por solo alheio nao precisa ser renderizado. Num
+  // retorno de musico, canal com o envio fechado tambem nao: quanto mais
+  // enxuto o mix, mais rapido sai.
+  const audiveis = tracks.filter((t) => {
+    if (alvoDe(t.mudo.gain) < 0.5) return false;
+    if (mix.bus === null) return faderToGain(t.fader) > 0.00002;
+    return alvoDe(t.envio[mix.bus === MON_PRE ? 2 : 3].gain) > 0.00002;
+  });
   let feitos = 0;
 
   for (const t of audiveis) {
@@ -773,7 +919,7 @@ async function exportarRapido() {
 
     const off = new OfflineAudioContext(2, amostras, taxa);
     if (workletReady) await off.audioWorklet.addModule('gate-processor.js');
-    const saida = await renderizarCanal(off, t, amostras);
+    const saida = await renderizarCanal(off, t, amostras, mix);
 
     for (let c = 0; c < 2; c++) {
       const dados = saida.getChannelData(Math.min(c, saida.numberOfChannels - 1));
@@ -784,10 +930,11 @@ async function exportarRapido() {
     await new Promise((r) => setTimeout(r, 0));   // deixa a tela respirar
   }
 
-  // O fader do LR e' um ganho: aplicar no fim da' o mesmo que aplicar durante.
-  const lr = master.gain.value;
-  if (lr !== 1) {
-    for (const canal of soma) for (let i = 0; i < canal.length; i++) canal[i] *= lr;
+  // O fader do fim — do LR, ou do bus de retorno — e' um ganho: aplicar depois
+  // da' o mesmo que aplicar durante.
+  const fim = alvoDe(mix.bus === null ? master.gain : monitores[mix.bus].fader.gain);
+  if (fim !== 1) {
+    for (const canal of soma) for (let i = 0; i < canal.length; i++) canal[i] *= fim;
   }
 
   el('expestado').textContent = 'Codificando…';
@@ -856,7 +1003,8 @@ function nomeDaMix() {
   const base = pastaLembrada && pastaLembrada.nome ? pastaLembrada.nome : 'mixagem';
   const d = new Date();
   const carimbo = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  return `${base} — mix ${carimbo}`.replace(/[\\/:*?"<>|]/g, '-');
+  // O nome diz qual mix e': exportando os dois, os arquivos nao se confundem.
+  return `${base} — mix ${mixAtual().nome} ${carimbo}`.replace(/[\\/:*?"<>|]/g, '-');
 }
 
 async function exportarMix() {
@@ -1109,10 +1257,18 @@ async function carregar(itens) {
     const hp2 = ctx.createBiquadFilter();
     for (const f of [hp1, hp2]) { f.type = 'peaking'; f.gain.value = 0; }
     const makeup = ctx.createGain();
-    const gain = ctx.createGain();
+    // Fim do processamento: o ponto PRE-FADER da tira. Daqui saem o medidor e o
+    // envio pre-fader. Existir como no' proprio e' o que permite ao PRE/POST do
+    // compressor religar a cadeia sem mexer em quem escuta esse ponto.
+    const pre = ctx.createGain();
+    // Mute e solo moram aqui, ANTES do fader. Antes moravam no proprio fader, e
+    // com eles juntos nao havia como um envio ignorar o fader e ainda obedecer
+    // ao mute — que e' exatamente o que um envio pre-fader faz.
+    const mudo = ctx.createGain();
+    const gain = ctx.createGain();     // o fader do canal, e so ele
     const pan = ctx.createStereoPanner();
-    // Um envio por efeito. Saem DEPOIS do fader, que e' o normal para efeito.
-    const envio = [ctx.createGain(), ctx.createGain()];
+    // Quatro envios: 1 delay, 2 reverb, 3 retorno PRE-fader, 4 retorno POS.
+    const envio = [0, 1, 2, 3].map(() => ctx.createGain());
     for (const e of envio) e.gain.value = 0;
     const analyser = ctx.createAnalyser();
     analyser.fftSize = 512;
@@ -1122,9 +1278,20 @@ async function carregar(itens) {
     else hp2.connect(eq[0]);
     eq[0].connect(eq[1]).connect(eq[2]).connect(eq[3]);
     comp.connect(makeup);
-    gain.connect(pan).connect(master);
+
+    pre.connect(mudo);
+    mudo.connect(gain).connect(pan).connect(master);
+
+    // Envio PRE-fader: sai do mute, antes do fader. O fader da casa nao o
+    // alcanca; o mute, sim.
+    mudo.connect(envio[2]).connect(monitores[MON_PRE].soma);
+
+    // Envios POS-fader: saem depois do fader. Delay e reverb sempre foram assim
+    // — e' o normal para efeito — e o bus 4 esta aqui de proposito, para
+    // comparar com o 3.
     gain.connect(envio[0]).connect(fx.entradaDelay);
     gain.connect(envio[1]).connect(fx.entradaReverb);
+    gain.connect(envio[3]).connect(monitores[MON_POS].soma);
     // A ligacao entre gate, EQ e compressor depende do PRE/POST e e' feita por
     // religarDinamica, chamada logo abaixo com o estado da mesa.
 
@@ -1132,8 +1299,7 @@ async function carregar(itens) {
     // antes do fader e do mute. E' o que deixa ajustar ganho pelo medidor com o
     // fader onde estiver. Saindo de `gain` (o fader), o medidor seguia o fader e
     // dava a impressao de que o fader era o botao de ganho.
-    // Quem alimenta o medidor muda com o PRE/POST, entao quem liga e'
-    // religarDinamica.
+    pre.connect(analyser);
     gain.gain.value = faderToGain(0.75);
 
     const faixa = {
@@ -1150,6 +1316,8 @@ async function carregar(itens) {
       eq,
       comp,
       makeup,
+      pre,
+      mudo,
       gain,
       pan,
       envio,
@@ -1157,6 +1325,9 @@ async function carregar(itens) {
       data: new Float32Array(analyser.fftSize),
       on: 1,
       solo: 0,
+      invert: 0,       // fase normal
+      ha: 1 / 6,       // ganho de preamp em 0 dB
+      trimNorm: 0.5,   // trim digital em 0 dB
       dynPost: null,   // ainda nao ligado: religarDinamica monta a cadeia
       fader: 0.75,
       dynSeq: 0,
@@ -1179,6 +1350,7 @@ async function carregar(itens) {
 
   relogio.base = 0;
   relogio.tocando = false;
+  montarSeletorDeMix();
   buildStrips();
   el('loader').classList.add('hidden');
   el('deck').classList.remove('hidden');
@@ -1347,6 +1519,34 @@ document.addEventListener('keydown', (e) => {
 // ---------------------------------------------------------------------------
 // Tela
 // ---------------------------------------------------------------------------
+const AJUDA_MIX = {
+  pa: 'O mix da casa: fader, pan e os efeitos. É o que o público ouve.',
+  pre: 'Retorno do músico com envio PRÉ-fader: mexer no fader do canal não muda o que ele ouve. Mute, muda.',
+  pos: 'Retorno do músico com envio PÓS-fader: baixar o fader do canal derruba o retorno junto. Compare com o pré.',
+};
+
+function montarSeletorDeMix() {
+  const host = el('escuta');
+  host.querySelectorAll('button').forEach((b) => b.remove());
+  for (const m of MIXES) {
+    const b = document.createElement('button');
+    b.textContent = m.nome;
+    b.dataset.mix = m.id;
+    b.addEventListener('click', () => escutarMix(m.id));
+    host.appendChild(b);
+  }
+  pintarMixes();
+}
+
+function pintarMixes() {
+  el('escuta').querySelectorAll('button').forEach((b) => {
+    b.classList.toggle('atual', b.dataset.mix === mixEscutado);
+  });
+  el('escutahint').textContent = AJUDA_MIX[mixEscutado] || '';
+  const bt = el('exportar');
+  if (bt) bt.textContent = `Exportar mix ${mixAtual().nome}`;
+}
+
 function buildStrips() {
   const host = el('strips');
   host.innerHTML = '';
@@ -1359,6 +1559,7 @@ function buildStrips() {
         <div class="name">${t.name}</div>
         <div class="meter"><span data-meter="${i}"></span></div>
       </div>
+      <div class="fase" data-fase="${i}" title="Fase invertida">Ø</div>
       <div class="clipe" data-clipe="${i}" title="Clipe"></div>
       <div class="db" data-db="${i}"></div>
       <div class="state on" data-state="${i}">ativo</div>`;
@@ -1372,6 +1573,8 @@ function paintStrip(i) {
   const db = el('strips').querySelector(`[data-db="${i}"]`);
   const st = el('strips').querySelector(`[data-state="${i}"]`);
   if (!db || !t) return;
+  const fase = el('strips').querySelector(`[data-fase="${i}"]`);
+  if (fase) fase.classList.toggle('aceso', !!t.invert);
   const v = faderToDb(t.fader);
   db.textContent = isFinite(v) ? `${v >= 0 ? '+' : ''}${v.toFixed(1)} dB` : '−∞';
   // Tres situacoes diferentes, e vale distinguir na tela: o canal isolado, os

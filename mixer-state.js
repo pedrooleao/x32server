@@ -110,6 +110,19 @@ function dbLabel(f) {
   return (db >= 0 ? '+' : '') + db.toFixed(1);
 }
 
+// Nomes e cores dos buses que a mesa ja entrega prontos. Os dois primeiros sao
+// os efeitos; o 3 e o 4 sao o mesmo retorno de musico, tapado em pontos
+// diferentes da tira de canal.
+const NOMES_BUS = { 1: 'Delay', 2: 'Reverb', 3: 'Musico PRE', 4: 'Musico POS' };
+const CORES_BUS = { 1: 4, 2: 6, 3: 3, 4: 5 };
+
+// De quais buses o envio sai ANTES do fader do canal. E' o que faz um retorno
+// de palco nao mudar quando o operador mexe no fader da casa.
+const BUS_PRE_FADER = { 3: true };
+
+// Quantos buses o player monta de verdade: 2 efeitos + 2 do retorno.
+const BUS_USADOS = 4;
+
 class MixerState {
   constructor() {
     this.channels = [];
@@ -130,6 +143,10 @@ class MixerState {
         // controla o audio, e o endereco (/ch/NN/preamp/trim) ja traz o numero
         // do canal — nao depende do mapa de preamps que o app nao monta.
         trim: 0.5,
+        // Inversao de fase — o botao "O/" da tela do canal. Na X32 vem no
+        // preamp, logo depois do ganho e ANTES do low cut e do EQ, e e' so
+        // trocar o sinal da amostra.
+        invert: 0,
         // Low Cut do preamp — o botao "Lowcut" da tela do canal. E' separado do
         // EQ e vem antes dele na cadeia. Inclinacao selecionavel na X32.
         hpon: 0,                 // 0 = desligado
@@ -186,11 +203,19 @@ class MixerState {
     this.main = { fader: 0.75, on: 1, pan: 0.5, name: 'LR' };
     this.buses = [];
     for (let i = 1; i <= BUS_COUNT; i++) {
-      // Os buses 1 e 2 sao os efeitos. Ja nascem com nome e cor para o operador
-      // achar sem procurar, e com o fader em 0 dB: o quanto o efeito volta para
-      // o LR e' esse fader.
-      const efeito = i === 1 ? 'Delay' : i === 2 ? 'Reverb' : '';
-      this.buses.push({ index: i, name: efeito, color: i === 1 ? 4 : i === 2 ? 6 : 1, fader: 0.75, on: 1 });
+      // Os quatro primeiros buses ja nascem nomeados e coloridos, para o
+      // operador achar sem procurar:
+      //   1 Delay e 2 Reverb — efeitos, envio POS-fader
+      //   3 e 4 — o retorno do musico, um com envio PRE e outro POS-fader.
+      //           E' o par que deixa ouvir a diferenca: baixar o fader do canal
+      //           muda o POS e nao mexe no PRE.
+      this.buses.push({
+        index: i,
+        name: NOMES_BUS[i] || '',
+        color: CORES_BUS[i] || 1,
+        fader: 0.75,
+        on: 1,
+      });
     }
 
     // Dois efeitos, nos moldes da X32: o slot 1 e' um delay alimentado pelo
@@ -257,6 +282,9 @@ class MixerState {
           return { type: 'i', value: ch.source };
         // Dois parametros distintos na X32, com faixas distintas. Estavam
         // caindo no mesmo campo.
+        case 'preamp/invert':
+          if (write) ch.invert = newValue ? 1 : 0;
+          return { type: 'i', value: ch.invert };
         case 'preamp/hpon':
           if (write) ch.hpon = newValue ? 1 : 0;
           return { type: 'i', value: ch.hpon };
@@ -625,13 +653,14 @@ class MixerState {
         trim: c.trim,                 // trim digital, 0..1 = -18 a +18 dB
         ha: c.gain,                   // ganho de preamp, 0..1 = -12 a +60 dB
         hp: { on: c.hpon, slope: c.hpslope, f: c.hpf },
-        sends: c.sends.slice(0, 2),
-        sendsOn: c.sendsOn.slice(0, 2),
+        invert: c.invert,
+        sends: c.sends.slice(0, BUS_USADOS),
+        sendsOn: c.sendsOn.slice(0, BUS_USADOS),
         eq: c.eq,
         gate: c.gate,
         dyn: c.dyn,
       })),
-      buses: this.buses.slice(0, 2).map((b) => ({ fader: b.fader, on: b.on })),
+      buses: this.buses.slice(0, BUS_USADOS).map((b) => ({ fader: b.fader, on: b.on })),
       fx: this.fx,
       main: { ...this.main, gain: faderToGain(this.main.fader) },
       tapeState: this.tapeState,
@@ -649,6 +678,8 @@ module.exports = {
   MixerState,
   CH_COUNT,
   BUS_COUNT,
+  BUS_USADOS,
+  BUS_PRE_FADER,
   faderToGain,
   faderToDb,
   dbLabel,

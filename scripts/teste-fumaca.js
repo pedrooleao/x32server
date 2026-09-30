@@ -177,6 +177,32 @@ async function testarPcm() {
   if (!worklet || worklet.status !== 200) falhou('gate-processor.js servido');
   else ok('gate-processor.js servido');
 
+  // 6b. Fase: e' um parametro de verdade, nao o catch-all engolindo o endereco.
+  await pedirOsc('/ch/05/preamp/invert', [{ type: 'i', value: 1 }]);
+  const fase = await pedirOsc('/ch/05/preamp/invert');
+  if (!fase) falhou('fase respondeu');
+  else if (fase.args[0] !== 1) falhou('fase guardou o valor', `veio ${fase.args[0]}`);
+  else {
+    await pedirOsc('/ch/05/preamp/invert', [{ type: 'i', value: 0 }]);
+    ok('inversao de fase guarda e devolve');
+  }
+
+  // 6c. Os buses do retorno do musico ja nascem nomeados: e' por eles que o
+  // operador acha o envio certo no Mixing Station.
+  const bus3 = await pedirOsc('/node', [{ type: 's', value: 'bus/03/config' }]);
+  const bus4 = await pedirOsc('/node', [{ type: 's', value: 'bus/04/config' }]);
+  if (!bus3 || !bus4) falhou('buses de retorno responderam');
+  else if (!/"Musico PRE"/.test(bus3.args[0]) || !/"Musico POS"/.test(bus4.args[0])) {
+    falhou('buses de retorno nomeados', `${bus3.args[0]} / ${bus4.args[0]}`);
+  } else ok('buses 3 e 4 nomeados como retorno do musico');
+
+  // 6d. Envio para o bus 3, que e' o pre-fader.
+  await pedirOsc('/ch/05/mix/03/level', [{ type: 'f', value: 0.5 }]);
+  const envio = await pedirOsc('/ch/05/mix/03/level');
+  if (!envio) falhou('envio para bus respondeu');
+  else if (Math.abs(envio.args[0] - 0.5) > 0.001) falhou('envio guardou o valor', `veio ${envio.args[0]}`);
+  else ok('envio de canal para o bus de retorno');
+
   // 7. As portas vizinhas de stems subiram? Sao elas que tiram o limite de 6
   // conexoes por origem do navegador, que deixava metade das faixas muda.
   // Aqui so interessa que a porta esteja atendendo; o CORS e' conferido no

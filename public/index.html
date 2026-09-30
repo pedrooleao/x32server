@@ -101,7 +101,7 @@
 
   .strip {
     display: grid;
-    grid-template-columns: 26px 1fr 10px 62px 44px;
+    grid-template-columns: 26px 1fr 14px 10px 62px 44px;
     gap: 12px;
     align-items: center;
     padding: 9px 0;
@@ -117,6 +117,41 @@
   .state.off { color: var(--mute); }
   .state.solo { color: var(--signal); font-weight: 600; }
   .state.calado { color: #5b6270; }
+
+  /* Seletor do que esta na caixa: PA ou o retorno do musico. */
+  .escuta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: 0 0 14px;
+  }
+  .escuta > span { color: var(--ink-dim); font-size: 12.5px; margin-right: 2px; }
+  .escuta button {
+    padding: 6px 13px;
+    font-size: 13px;
+    border: 1px solid #333a44;
+    background: #1b1f25;
+    color: var(--ink-dim);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .escuta button:hover { border-color: #47505d; color: var(--ink); }
+  .escuta button.atual {
+    background: var(--signal);
+    border-color: var(--signal);
+    color: #10141a;
+    font-weight: 600;
+  }
+
+  /* Fase invertida no canal. So aparece quando esta invertida. */
+  .fase {
+    font-size: 12px;
+    color: var(--signal);
+    font-weight: 600;
+    visibility: hidden;
+  }
+  .fase.aceso { visibility: visible; }
 
   .clipe {
     width: 10px;
@@ -208,6 +243,12 @@
 
     <div class="bar" id="bar"><span id="fill"></span></div>
     <p class="hint barhint">Clique ou arraste na barra para ir a qualquer ponto. Espaço toca e pausa; setas pulam 5s.</p>
+
+    <div class="escuta" id="escuta">
+      <span>Escutando:</span>
+    </div>
+    <p class="hint barhint" id="escutahint"></p>
+
     <div id="strips"></div>
 
     <div class="exportar hidden" id="expcaixa">

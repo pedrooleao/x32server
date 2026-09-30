@@ -207,6 +207,98 @@ reprodução.)
 
 ---
 
+## `param.value` não é leitura confiável do que se pediu
+
+Todo ajuste da mesa sobe em rampa, com `setTargetAtTime`, para não estalar. E a
+exportação monta a cadeia offline **lendo esses parâmetros de volta**.
+
+O problema: `AudioParam.value` devolve o valor que o nó *calculou* no último
+bloco de renderização, e um nó que não está renderizando não calcula nada. Um nó
+recém-criado e sem ligação **nunca se move** — medido: `setTargetAtTime(0.5)`
+num `GainNode` solto deixa o `.value` em 1 para sempre. Na cadeia viva, com a
+música parada, o valor também pode ficar para trás.
+
+Resultado: **um ajuste feito com a música pausada podia não entrar no arquivo
+exportado.** Foi encontrado testando a inversão de fase — a fase entra como
+troca de sinal do ganho de entrada, e o render saía idêntico ao normal.
+
+A correção é guardar o alvo junto da rampa, num `WeakMap`:
+
+```js
+function rampa(param, valor, tau = 0.02) {
+  ALVOS.set(param, valor);
+  param.setTargetAtTime(valor, ctx.currentTime, tau);
+}
+function alvoDe(param) {
+  return ALVOS.has(param) ? ALVOS.get(param) : param.value;
+}
+```
+
+Todo ajuste passa por `rampa`; a exportação lê por `alvoDe`. Nunca ler
+`param.value` para reconstruir a cadeia.
+
+---
+
+## Fase, mute e o ponto de tap dos envios
+
+### A fase não precisa de nó nenhum
+
+Inverter fase é trocar o sinal da amostra, e o ganho de entrada do canal já é um
+`GainNode`: basta deixá-lo negativo. A cadeia não cresce e a exportação leva a
+fase de graça, porque já copia esse ganho.
+
+Verificado renderizando o mesmo canal com e sem inversão: a soma dos dois deu
+**exatamente zero** em todas as 144.000 amostras.
+
+A troca sobe em rampa como todo o resto, então passa por zero — algumas dezenas
+de ms de queda no lugar do estalo que um pulo seco daria.
+
+### O mute teve que sair de dentro do fader
+
+Antes, `t.gain` acumulava fader **e** mute: `rampGain` escrevia
+`audivel(t) ? faderToGain(t.fader) : 0`. Simples, e bastava enquanto todo envio
+saía depois do fader.
+
+Um envio **pré-fader** quebra isso: ele tem de ignorar o fader e ainda obedecer
+ao mute. Com os dois valores no mesmo nó não há como — é um número só.
+
+Então o mute virou nó próprio, na frente do fader:
+
+```
+processamento → pre → mudo ─┬─→ fader → pan → LR
+                            │         │
+               bus 3 (PRÉ) ◀┘         ├─→ Delay, Reverb
+                                      └─→ bus 4 (PÓS)
+```
+
+`pre` existe para o medidor e o envio pré-fader terem um ponto fixo onde se
+pendurar: quem fecha o processamento muda com o PRE/POST do compressor, e antes
+o religamento tinha de mexer também em quem alimenta o medidor.
+
+Medido, com os envios dos dois buses em 0 dB e os faders de canal em −∞:
+
+| | PA | bus 3 (pré) | bus 4 (pós) |
+|---|---|---|---|
+| Faders em 0 dB | 0,605 | 0,605 | 0,605 |
+| Faders em −∞ | 0 | **0,618** | 0 |
+| Canais em mute | 0 | 0 | 0 |
+
+### O ponto de tap não vem do Mixing Station
+
+Na X32 o tap de cada envio é configurável. Aqui ele é **fixo por bus** — 3 é
+pré, 4 é pós — porque não há como verificar sem o tablet em qual endereço o
+Mixing Station manda essa escolha, e um endereço errado daria um botão que não
+faz nada. Os dois buses ficam nomeados ("Musico PRE" e "Musico POS") para o
+operador achar o envio certo.
+
+Por isso também **não** foi acrescentada a linha de `/node` do bloco
+`/ch/NN/preamp`: o formato do X32 para ela não pôde ser conferido, e o catch-all
+atual já responde algo que não derruba o sync. O efeito colateral é pequeno — o
+Mixing Station pode mostrar o Ø desligado logo depois de reconectar, até alguém
+tocar no botão; o áudio e o app seguem certos.
+
+---
+
 ## Armadilhas da Web Audio
 
 ### O `Q` do biquad é em decibéis nos filtros de corte
