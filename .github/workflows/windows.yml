@@ -42,6 +42,8 @@ jobs:
           try {
             node scripts/teste-fumaca.js
             if ($LASTEXITCODE -ne 0) { throw "teste de fumaca falhou" }
+            node scripts/teste-wing.js
+            if ($LASTEXITCODE -ne 0) { throw "teste da WING falhou" }
           } finally {
             Stop-Process -Id $mesa.Id -Force -ErrorAction SilentlyContinue
           }
@@ -63,6 +65,7 @@ jobs:
             Copy-Item $f "$app/$f"
           }
           Copy-Item 'public' "$app/public" -Recurse
+          Copy-Item 'wing' "$app/wing" -Recurse
           Copy-Item 'node_modules/ws' "$app/node_modules/ws" -Recurse
           Copy-Item 'build/icon.ico' "$app/icone.ico"
           Rename-Item "$pasta/electron.exe" "$nome.exe"
@@ -78,6 +81,8 @@ jobs:
             if ($app.HasExited) { throw "o app fechou sozinho (codigo $($app.ExitCode))" }
             node scripts/teste-fumaca.js
             if ($LASTEXITCODE -ne 0) { throw "o app subiu mas a mesa nao respondeu" }
+            node scripts/teste-wing.js
+            if ($LASTEXITCODE -ne 0) { throw "o app subiu mas a WING nao respondeu" }
           } finally {
             Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue
           }

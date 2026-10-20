@@ -1,16 +1,21 @@
 # Mesa de playback
 
-Faz o seu computador aparecer na rede como uma **Behringer X32** e tocar as
-multipistas de uma música. O Mixing Station conecta nele como se fosse uma mesa
-de verdade: o aluno mexe em fader, ganho, EQ, gate, compressor e solo no tablet
-e ouve o resultado na hora.
+Faz o seu computador aparecer na rede como uma **Behringer X32** e, ao mesmo
+tempo, como uma **Behringer WING**, e tocar as multipistas de uma música. O
+Mixing Station e o WING Edit conectam nele como se fosse uma mesa de verdade:
+o aluno mexe em fader, ganho, EQ, gate, compressor e solo e ouve o resultado
+na hora.
 
 Serve para dar aula de som sem depender de uma mesa física.
 
 ```
 Mixing Station  ──OSC/UDP:10023──▶  computador  ──▶  caixas de som
    (tablet)                          (o app)         toca os stems
+WING Edit       ──TCP:2222───────▶
 ```
+
+As duas mesas são **a mesma mesa**: baixar um fader no WING Edit baixa no
+Mixing Station também, e vice-versa.
 
 ## Instalar
 
@@ -47,6 +52,52 @@ ponto.
 
 Se o Mixing Station não achar a mesa sozinho, use "Manual IP" — a descoberta
 automática por broadcast não está implementada.
+
+## Usar com o WING Edit
+
+O app também aparece na rede como uma **WING**, então o WING Edit (o editor
+oficial da Behringer, para Mac, Windows e Linux) conecta nele.
+
+1. Abra o app normalmente, como acima.
+2. Abra o WING Edit na mesma rede. A mesa **Mesa-Playback** aparece na lista
+   sozinha — a descoberta da WING está implementada. Se não aparecer, digite o
+   endereço que está em **Mesa → Como conectar o WING Edit**. No mesmo
+   computador do app, use `127.0.0.1`.
+3. Mexa à vontade: o que tem equivalente no player muda o som (veja a tabela).
+
+O **player USB** do WING Edit comanda o transporte: PLAY, PAUSE e STOP tocam,
+pausam e param a música, e a tela dele mostra se ela está tocando.
+
+| No WING Edit | Mexe no som? |
+|---|---|
+| Fader, mute, pan, nome e solo — canais 1 a 32 | sim |
+| Ganho, trim e inversão de fase | sim |
+| Low cut (frequência e inclinação) | sim — até 400 Hz, o limite do player |
+| EQ modelo **WING EQ** (STD): as 6 bandas, L e H como PEQ ou prateleira | sim |
+| Gate modelo **GATE** (ratio 1:1.5 a 1:4 e gate) | sim |
+| Dinâmica modelo **COMP**: threshold, ratio, knee, attack, hold, release, ganho | sim |
+| Envios 1 a 4 (Delay, Reverb, Músico PRE e PÓS) e faders dos buses 1 a 4 | sim |
+| Main 1: fader, mute e pan | sim |
+| Player USB: PLAY, PAUSE, STOP | sim |
+| Medidores de canal e do main | sim |
+| Canais 33 a 40, aux, matrizes, DCAs, efeitos da WING | guardam o valor, não mexem no som |
+| Os outros modelos de EQ, gate e dinâmica (SOUL, E88, LA, 76LA...) | guardam o valor; o bloco passa limpo |
+
+**Primeira vez: falta testar com o WING Edit de verdade.** O protocolo foi
+escrito a partir da documentação da Behringer e de duas bibliotecas abertas que
+já falam com WINGs reais, e foi conferido contra uma delas — mas ainda não
+contra o próprio WING Edit. Se ele não conectar, ou conectar e mostrar algo
+estranho, abra **Mesa → Mostrar registro da WING** e mande o arquivo
+`wing-registro.txt`: ele guarda, byte a byte, o que o WING Edit pediu, que é o
+que falta para acertar.
+
+O WING Edit pode recusar uma mesa com firmware diferente do dele. A mesa diz
+que é uma WING Compact com firmware **3.0.5**, que é de onde veio o mapa de
+parâmetros. Para fingir outra versão, abra pelo Terminal:
+
+```bash
+MESA_WING_FIRMWARE=3.1.0 npm start
+```
 
 ## Preparar os stems
 
@@ -239,6 +290,12 @@ for f in *.m4a; do afconvert -f WAVE -d LEI16@44100 "$f" "${f%.m4a}.wav"; done
 **"Porta ocupada"** — outro programa está usando a porta da mesa. Feche o
 X32-Edit, outro emulador, ou outra cópia deste app.
 
+**O WING Edit não acha a mesa** — digite o endereço à mão (menu Mesa → Como
+conectar o WING Edit). Se nem assim conectar, veja se o terminal disse que a
+porta 2222 está ocupada: a X32 continua funcionando, só a WING fica fora. Para
+ver tudo o que o WING Edit manda, rode `MESA_WING_DEBUG=1 npm start` — ou mande
+o `wing-registro.txt` (menu Mesa → Mostrar registro da WING).
+
 **O som some quando a janela fica atrás de outra** — mantenha a janela visível.
 O navegador estrangula temporizadores em janelas de fundo.
 
@@ -271,7 +328,11 @@ releases.
 
 As decisões de implementação que custaram caro para descobrir estão em
 **[NOTAS-TECNICAS.md](NOTAS-TECNICAS.md)**: o que o Mixing Station espera do
-protocolo do X32, as armadilhas da Web Audio e as do `codesign`.
+protocolo do X32, como a WING é emulada, as armadilhas da Web Audio e as do
+`codesign`.
+
+Com a mesa no ar, `node scripts/teste-fumaca.js` confere a X32 e
+`node scripts/teste-wing.js` confere a WING.
 
 ## Limitações
 

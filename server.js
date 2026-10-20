@@ -11,6 +11,7 @@ const { WebSocketServer } = require('ws');
 const osc = require('./osc');
 const wav = require('./wav');
 const { MixerState, CH_COUNT, BUS_USADOS, faderToGain } = require('./mixer-state');
+const { iniciarWing } = require('./wing');
 
 const OSC_PORT = 10023;      // porta do X32
 const HTTP_PORT = 8080;
@@ -30,6 +31,11 @@ const FIRMWARE = '4.06';
 const MODEL = 'X32';
 
 const state = new MixerState();
+
+// A mesa tambem aparece como uma WING, para o WING Edit. Sobe no fim deste
+// arquivo, depois da X32 e do player: a arvore da WING leva quase um segundo
+// para carregar e, se falhar, a X32 tem de continuar de pe.
+let wing = null;
 
 // ---------------------------------------------------------------------------
 // Clientes OSC inscritos (/xremote vale 10 s e e' renovado pelo app)
@@ -225,6 +231,7 @@ udp.on('message', (msg, rinfo) => {
 
   broadcast(alvo, [{ type: written.type, value: written.value }], key);
   pushToBrowser(alvo, written);
+  if (wing) wing.x32Mudou(alvo);
 });
 
 // Quem embrulha a mesa numa janela (main.js do Electron) escuta estes eventos:
@@ -259,7 +266,11 @@ udp.bind(OSC_PORT, () => {
   // Abrir o player pelo IP da rede tira o contexto seguro e desliga o gate
   // (AudioWorklet so existe em https ou localhost), entao mandamos no localhost.
   console.log(`Player de playback, aqui no Mac: http://localhost:${HTTP_PORT}`);
-  eventos.emit('pronto', { url: `http://localhost:${HTTP_PORT}`, ip: localIp(), porta: OSC_PORT });
+  eventos.emit('pronto', {
+    url: `http://localhost:${HTTP_PORT}`, ip: localIp(), porta: OSC_PORT,
+    portaWing: wing ? wing.portaNativa : null,
+    registroWing: wing ? wing.arquivoRegistro : null,
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -546,8 +557,10 @@ wss.on('connection', (ws) => {
       // O navegador leu a pasta de stems e nomeou os canais.
       msg.names.forEach((name, i) => {
         if (i >= CH_COUNT) return;
-        state.access(`/ch/${String(i + 1).padStart(2, '0')}/config/name`, name);
-        broadcast(`/ch/${String(i + 1).padStart(2, '0')}/config/name`, [{ type: 's', value: name }]);
+        const endereco = `/ch/${String(i + 1).padStart(2, '0')}/config/name`;
+        state.access(endereco, name);
+        broadcast(endereco, [{ type: 's', value: name }]);
+        if (wing) wing.x32Mudou(endereco);
       });
       const usados = msg.names.filter((n) => n);
       console.log(`${usados.length} stems carregados: ${usados.join(', ')}`);
@@ -571,6 +584,7 @@ wss.on('connection', (ws) => {
     if (msg.type === 'tape') {
       state.tapeState = msg.value | 0;
       broadcast('/-stat/tape/state', [{ type: 'i', value: state.tapeState }]);
+      if (wing) wing.x32Mudou('/-stat/tape/state');
     }
   });
 
@@ -757,6 +771,46 @@ setInterval(() => {
     }
   }
 }, 50);
+
+// ---------------------------------------------------------------------------
+// WING
+//
+// A WING escreve no mesmo estado que o Mixing Station, pelo mesmo caminho: o
+// valor vai para o estado, para os outros apps de X32 e para o navegador. Por
+// isso o audio nao precisa saber que existe uma WING.
+// ---------------------------------------------------------------------------
+function escreverX32(endereco, valor) {
+  const written = state.access(endereco, valor);
+  if (!written) return;
+  broadcast(endereco, [{ type: written.type, value: written.value }]);
+  pushToBrowser(endereco, written);
+}
+
+try {
+  wing = iniciarWing({
+    nome: CONSOLE_NAME,
+    ip: localIp,
+    lerX32: (endereco) => {
+      const r = state.access(endereco);
+      return r ? r.value : undefined;
+    },
+    escreverX32,
+    aoTransporte: (acao) => {
+      const msg = JSON.stringify({ type: 'transporte', acao });
+      for (const ws of browsers) if (ws.readyState === 1) ws.send(msg);
+    },
+    medidores: () => ({ niveis: lastMeters, gr: lastGr }),
+    pastaRegistro: path.dirname(ARQ_CONFIG),
+    // Sem as portas da WING a mesa ainda serve ao Mixing Station: avisa e segue.
+    aoFalhar: (porta, err) => {
+      const motivo = err.code === 'EADDRINUSE' ? 'ja esta ocupada (outro emulador de WING aberto?)' : err.message;
+      console.error(`WING: a porta ${porta} ${motivo}. O WING Edit nao vai conectar; o Mixing Station segue normal.`);
+    },
+  });
+  console.log(`Tambem como WING em ${localIp()}: no WING Edit, conecte em ${localIp()} (porta ${wing.portaNativa})`);
+} catch (err) {
+  console.error('WING: nao consegui subir a emulacao.', err.message);
+}
 
 process.on('SIGINT', () => {
   console.log('\nDesligando a mesa.');

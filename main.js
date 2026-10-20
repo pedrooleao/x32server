@@ -156,6 +156,30 @@ function montarMenu(info) {
             });
           },
         },
+        {
+          label: 'Como conectar o WING Edit',
+          enabled: !!info.portaWing,
+          click: () => {
+            dialog.showMessageBox({
+              type: 'info',
+              title: 'Conectar o WING Edit',
+              message: 'A mesa também aparece na rede como uma Behringer WING.',
+              detail:
+                `No WING Edit, escolha a mesa "Mesa-Playback" na lista ou digite o endereço:\n\n` +
+                `Endereço: ${info.ip}\n` +
+                `(no mesmo computador, 127.0.0.1)\n\n` +
+                `Se não conectar, mande o arquivo do registro da WING ` +
+                `(menu Mesa → Mostrar registro da WING): ele guarda o que o ` +
+                `WING Edit pediu.`,
+              buttons: ['Fechar'],
+            });
+          },
+        },
+        {
+          label: 'Mostrar registro da WING',
+          enabled: !!info.registroWing,
+          click: () => shell.showItemInFolder(info.registroWing),
+        },
         { type: 'separator' },
         { role: 'reload' },
         { role: 'toggleDevTools' },

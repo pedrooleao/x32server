@@ -21,6 +21,7 @@
 !/osc.js
 !/mixer-state.js
 !/wav.js
+!/wing/
 !/public/
 !/scripts/
 !/build/

@@ -35,6 +35,7 @@ for f in main.js server.js osc.js mixer-state.js wav.js package.json; do
   cp "$RAIZ/$f" "$APP/$f"
 done
 cp -R "$RAIZ/public" "$APP/public"
+cp -R "$RAIZ/wing" "$APP/wing"
 # So a dependencia de producao: o ws. O resto e' ferramenta de build.
 cp -R "$RAIZ/node_modules/ws" "$APP/node_modules/ws"
 # Icone da janela e da barra de tarefas (o do .exe exige ferramenta do Windows).

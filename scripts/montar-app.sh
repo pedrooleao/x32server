@@ -40,6 +40,7 @@ for f in main.js server.js osc.js mixer-state.js wav.js package.json; do
   $COPIAR "$RAIZ/$f" "$REC/app/$f"
 done
 $COPIAR "$RAIZ/public" "$REC/app/public"
+$COPIAR "$RAIZ/wing" "$REC/app/wing"
 # So a dependencia de producao: o ws. O resto e' ferramenta de build.
 $COPIAR "$RAIZ/node_modules/ws" "$REC/app/node_modules/ws"
 

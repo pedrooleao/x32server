@@ -172,6 +172,10 @@ class MixerState {
             { type: 2, f: freqNorm(500), g: 0.5, q: qNorm(2.0) },   // PEQ
             { type: 2, f: freqNorm(2000), g: 0.5, q: qNorm(2.0) },  // PEQ
             { type: 4, f: freqNorm(8000), g: 0.5, q: qNorm(1.4) },  // HighShelf
+            // As duas a mais do EQ da WING. A X32 nao as enxerga: ficam em
+            // 0 dB, e o som e' o mesmo de um EQ de quatro bandas.
+            { type: 2, f: freqNorm(1000), g: 0.5, q: qNorm(2.0) },  // PEQ
+            { type: 2, f: freqNorm(5000), g: 0.5, q: qNorm(2.0) },  // PEQ
           ],
         },
         gate: {
@@ -311,8 +315,9 @@ class MixerState {
           return { type: 'i', value: ch.dyn.on };
 
         default: {
-          // EQ por banda: /ch/NN/eq/1/{type,f,g,q}
-          const eqMatch = key.match(/^eq\/([1-4])\/(type|f|g|q)$/);
+          // EQ por banda: /ch/NN/eq/1/{type,f,g,q}. A 5 e a 6 so existem para
+          // a WING; nenhum app de X32 as pede.
+          const eqMatch = key.match(/^eq\/([1-6])\/(type|f|g|q)$/);
           if (eqMatch) {
             const band = ch.eq.bands[parseInt(eqMatch[1], 10) - 1];
             const field = eqMatch[2];

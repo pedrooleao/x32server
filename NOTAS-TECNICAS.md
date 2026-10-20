@@ -13,6 +13,8 @@ Mixing Station ──OSC/UDP:10023──▶ server.js ──WebSocket──▶ n
 - `mixer-state.js` — estado da mesa: 32 canais, 16 buses, LR, curvas do X32
 - `server.js` — protocolo do X32 e servidor HTTP/WebSocket
 - `wav.js` — lê WAV e AIFF para cortar os stems em pedaços
+- `wing/` — a mesma mesa vista como uma Behringer WING (protocolo nativo, OSC
+  da WING e a ponte para o estado da X32)
 - `public/` — player e engine de áudio
 - `public/pcm.js` — toca uma faixa sem compressão aos pedaços
 - `main.js` — janela do Electron; roda o `server.js` sem alterá-lo
@@ -103,6 +105,101 @@ MESA_GANHO=1 npm start    # só o que tem a ver com ganho de entrada
 
 Mexa só naquele botão e veja o endereço e o valor. É o jeito de saber se um
 controle vai para onde você acha que vai.
+
+---
+
+## A WING
+
+O app aparece como X32 **e** como WING ao mesmo tempo, em portas diferentes:
+
+```
+WING Edit ──TCP 2222──▶ wing/index.js ──▶ wing/ponte.js ──▶ estado da X32 ──▶ navegador
+                         (protocolo         (traduz WING      (o mesmo que o
+                          nativo)            ⇄ X32)            Mixing Station usa)
+```
+
+A WING não ganhou motor de áudio próprio. A ponte escreve no estado da X32 pelo
+mesmo caminho do Mixing Station — `state.access`, aviso aos apps de X32, aviso
+ao navegador — e o som não sabe que existe uma WING. No sentido contrário,
+toda escrita da X32 (do tablet ou do player) passa por `wing.x32Mudou`, e o
+WING Edit vê o fader andar.
+
+### O protocolo nativo
+
+É o que o WING Edit usa. TCP 2222, um fluxo de bytes com canais misturados por
+escape (`DF D1` dados, `DF D3` medidores, `DF DE` é um `0xDF` literal). Dentro
+do canal, cada token começa por um byte que diz o tipo — a tabela inteira está
+no topo de `wing/protocolo.js`. O que importa para responder:
+
+- **Só existe id.** Nenhum nome trafega: o WING Edit pede `D7 <id> DC` e espera
+  `D7 <id> <valor> DE`. Também dá para andar pela árvore (`DA` raiz, `C0+n`
+  filho por nome, `40+n` filho por índice, `DB` sobe).
+- **`DC` num nó despeja a subárvore inteira**, folha por folha, e fecha com
+  `DE`. Na raiz são ~29.500 valores; sai em menos de 200 ms.
+- **`DD` num nó devolve a definição dos filhos; numa folha, a dela.** É como o
+  libwing descobre a árvore.
+- **A definição vai crua**, exatamente os bytes que a mesa real mandou ao
+  libwing: `DF`, tamanho em 16 bits, os bytes. Não montamos nada.
+- **Medidores** vão por UDP para a porta que o cliente informa no canal 3:
+  4 bytes de id da inscrição + `int16` em 1/256 dB, 20 vezes por segundo,
+  enquanto o cliente renovar a inscrição (`D4`) a cada menos de 5 s.
+- **Descoberta**: `WING?` na UDP 2222, resposta
+  `WING,ip,nome,modelo,serie,firmware`. O IP devolvido é o da interface na
+  mesma rede de quem perguntou — num computador com cabo e Wi-Fi, o primeiro
+  IP da lista pode ser o da rede errada.
+
+### O mapa vem de uma mesa real
+
+`wing/esquema.bin.gz` são os 60 mil nós que o libwing
+([github.com/dannydulai/libwing](https://github.com/dannydulai/libwing), Apache
+2.0) leu de uma WING Compact em firmware 3.0.5, com id, pai, tipo, faixa e
+opções. `scripts/gerar-esquema-wing.js` o refaz a partir do `src/propmap.rs`
+de lá. Por isso a mesa diz ser uma WING Compact 3.0.5 (`MESA_WING_FIRMWARE` e
+`MESA_WING_MODELO` trocam isso).
+
+### Encaixes: o mesmo id, outro botão
+
+O gate, a dinâmica, o EQ e os efeitos têm **modelo** (`mdl`). Trocar o modelo
+troca os botões — mas os ids não mudam: o encaixe 1 do gate é `thr` no GATE e
+`att` no WAVE, com o mesmo id. Então o valor é guardado **por id**, e a
+definição de cada encaixe vem do modelo atual. Trocar o modelo zera os
+encaixes, como na mesa.
+
+Zerar não serve para os modelos que o player toca: o GATE nasceria com
+threshold em 0 dB e calaria o canal. Ao escolher GATE, COMP ou o EQ padrão, a
+ponte recarrega os encaixes do estado da X32.
+
+### O que a ponte converte
+
+Unidade de verdade (dB, Hz, ms) na WING; 0..1 na X32, com as escalas que
+`public/app.js` usa. Alguns casos não são diretos:
+
+- **EQ de 6 bandas.** O padrão da WING tem L, 1 a 4 e H; a X32 tem 4. O estado
+  passou a ter 6 bandas: as quatro primeiras são as da X32 (L, 1, 3, H), a 5 e
+  a 6 são as bandas 2 e 4 da WING. Filtros em série dão o mesmo resultado em
+  qualquer ordem, e nenhum app de X32 enxerga a 5 e a 6.
+- **Modo do gate.** Na WING o modo é o modelo (GATE, DUCK) mais o *ratio*
+  (1:1.5 a 1:4, gate); na X32, um número só (EXP2, EXP3, EXP4, GATE, DUCK).
+- **Modelo que o player não tem** (SOUL, E88, LA...): o bloco desliga na X32 e
+  o som passa limpo. Os botões continuam respondendo ao WING Edit.
+- **Ligar o gate pelo Mixing Station não troca o modelo** escolhido no WING
+  Edit. Só uma mudança de *modo* na X32 escolhe modelo na WING.
+
+### O que ainda não se sabe
+
+Não houve WING Edit para testar — nem WING. Tudo acima foi conferido contra
+uma biblioteca cliente independente (`behringer-wing`, do npm) e contra o
+player rodando num Chromium. O que pode estar diferente da mesa real:
+
+- se o WING Edit usa outros canais além do 1 e do 3 (o documento da Behringer
+  cita um "canal 2, audio engine");
+- se ele recusa firmware diferente do dele;
+- se ele espera eco das próprias escritas (a mesa não ecoa, como a X32);
+- quantas palavras os medidores de fonte (`A7`) e saída (`A8`) levam.
+
+O `wing-registro.txt` (menu Mesa → Mostrar registro da WING) guarda o começo
+de cada conexão em hexadecimal, com os tokens já lidos e o caminho de cada id.
+É o que responde a essas perguntas.
 
 ---
 

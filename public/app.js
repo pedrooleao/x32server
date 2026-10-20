@@ -248,6 +248,7 @@ function connect() {
     }
     if (msg.type === 'param') handleParam(msg);
     if (msg.type === 'pasta') receberPasta(msg);
+    if (msg.type === 'transporte') transporteRemoto(msg.acao);
   };
 }
 
@@ -404,6 +405,17 @@ const normMs = (n) => n * 0.12;
 const normHold = (n) => n * 2;
 const normRelease = (n) => (5 * Math.pow(800, n)) / 1000;
 const normMakeup = (n) => Math.pow(10, (n * 24) / 20);
+
+// Seis bandas: as quatro da X32 e mais duas, que so a WING usa — o EQ padrao
+// dela tem prateleira baixa, quatro parametricas e prateleira alta. Na X32 as
+// duas extras ficam paradas em 0 dB e nao mudam o som.
+const BANDAS_EQ = 6;
+
+/** Liga os filtros em fila e devolve o ultimo, onde a cadeia continua. */
+function encadear(filtros) {
+  for (let i = 1; i < filtros.length; i++) filtros[i - 1].connect(filtros[i]);
+  return filtros[filtros.length - 1];
+}
 
 const EQ_TYPE_MAP = {
   0: 'highpass',
@@ -578,7 +590,8 @@ function religarDinamica(t, pos) {
   t.dynPost = post;
 
   const entrada = t.gate || t.hp2;   // quem alimenta o bloco de processamento
-  for (const no of [entrada, t.eq[3], t.makeup]) {
+  const ultimaBanda = t.eq[t.eq.length - 1];
+  for (const no of [entrada, ultimaBanda, t.makeup]) {
     try { no.disconnect(); } catch (e) { /* ainda nao ligado */ }
   }
 
@@ -588,12 +601,12 @@ function religarDinamica(t, pos) {
   // nao sabem que a cadeia mudou.
   if (post) {
     entrada.connect(t.eq[0]);
-    t.eq[3].connect(t.comp);
+    ultimaBanda.connect(t.comp);
     t.makeup.connect(t.pre);
   } else {
     entrada.connect(t.comp);
     t.makeup.connect(t.eq[0]);
-    t.eq[3].connect(t.pre);
+    ultimaBanda.connect(t.pre);
   }
 }
 
@@ -882,12 +895,12 @@ async function renderizarCanal(off, t, amostras, mix) {
   // Respeita o PRE/POST do compressor, como na cadeia ao vivo.
   if (t.dynPost) {
     entrada.connect(eq[0]);
-    eq[0].connect(eq[1]).connect(eq[2]).connect(eq[3]).connect(comp);
+    encadear(eq).connect(comp);
     comp.connect(makeup).connect(pre);
   } else {
     entrada.connect(comp);
     comp.connect(makeup).connect(eq[0]);
-    eq[0].connect(eq[1]).connect(eq[2]).connect(eq[3]).connect(pre);
+    encadear(eq).connect(pre);
   }
 
   src.start();
@@ -1241,7 +1254,7 @@ async function carregar(itens) {
           channelCountMode: 'explicit',
         })
       : null;
-    const eq = [0, 1, 2, 3].map(() => {
+    const eq = Array.from({ length: BANDAS_EQ }, () => {
       const f = ctx.createBiquadFilter();
       f.type = 'peaking';
       f.gain.value = 0;
@@ -1276,7 +1289,7 @@ async function carregar(itens) {
     src.connect(trim).connect(hp1).connect(hp2);
     if (gate) hp2.connect(gate).connect(eq[0]);
     else hp2.connect(eq[0]);
-    eq[0].connect(eq[1]).connect(eq[2]).connect(eq[3]);
+    encadear(eq);
     comp.connect(makeup);
 
     pre.connect(mudo);
@@ -1331,7 +1344,7 @@ async function carregar(itens) {
       dynPost: null,   // ainda nao ligado: religarDinamica monta a cadeia
       fader: 0.75,
       dynSeq: 0,
-      eqTypes: [1, 2, 2, 4],
+      eqTypes: [1, 2, 2, 4, 2, 2],
       eqOn: 1,
     };
     tracks.push(faixa);
@@ -1477,12 +1490,21 @@ function sendTape(v) {
   if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'tape', value: v }));
 }
 
-el('playbtn').addEventListener('click', () => (playing() ? pause() : play()));
-el('stopbtn').addEventListener('click', () => {
+function stop() {
   pause();
   seek(0);
   sendTape(0);
-});
+}
+
+// O player USB da WING: o WING Edit manda tocar, pausar e parar por aqui.
+function transporteRemoto(acao) {
+  if (acao === 'play' && !playing()) play();
+  else if (acao === 'pause' && playing()) pause();
+  else if (acao === 'stop') stop();
+}
+
+el('playbtn').addEventListener('click', () => (playing() ? pause() : play()));
+el('stopbtn').addEventListener('click', stop);
 el('back10').addEventListener('click', () => seek(posicao() - 10));
 el('fwd10').addEventListener('click', () => seek(posicao() + 10));
 
