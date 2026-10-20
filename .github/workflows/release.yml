@@ -1,0 +1,98 @@
+# Monta, testa e publica uma release inteira a partir de uma tag.
+#
+#   git tag v0.7.0 && git push origin v0.7.0
+#
+# Antes o .dmg saia de um Mac e o .zip do Windows era baixado do Actions e
+# subido a mao. Agora os dois saem daqui, de maquinas de verdade de cada
+# sistema, e so viram release se o app empacotado subir e responder como X32 e
+# como WING. As notas vem de .github/notas/<tag>.md: a primeira linha, com
+# "# ", e' o titulo da release; o resto, o texto.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  # O mesmo fluxo de todo push na main: monta o pacote portatil e testa o .exe.
+  windows:
+    uses: ./.github/workflows/windows.yml
+
+  mac:
+    # macos-latest e' Apple Silicon, a mesma arquitetura do .dmg.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Conferir que a tag bate com o package.json
+        run: |
+          versao="v$(node -p "require('./package.json').version")"
+          if [ "$versao" != "$GITHUB_REF_NAME" ]; then
+            echo "A tag e' $GITHUB_REF_NAME, mas o package.json diz $versao"
+            exit 1
+          fi
+          test -f ".github/notas/$GITHUB_REF_NAME.md" || { echo "Faltam as notas em .github/notas/$GITHUB_REF_NAME.md"; exit 1; }
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Montar o .dmg
+        run: ./scripts/montar-app.sh
+
+      # Abre o app de dentro do .dmg, como o usuario abriria, e fala com ele.
+      - name: Testar o app empacotado
+        run: |
+          dmg="$(ls dist/*.dmg)"
+          hdiutil attach "$dmg" -nobrowse -mountpoint /Volumes/mesa >/dev/null
+          "/Volumes/mesa/Mesa de Playback.app/Contents/MacOS/Mesa de Playback" &
+          app=$!
+          sleep 15
+          ok=0
+          node scripts/teste-fumaca.js && node scripts/teste-wing.js && ok=1
+          kill $app 2>/dev/null || true
+          hdiutil detach /Volumes/mesa >/dev/null || true
+          [ $ok = 1 ] || { echo "o app empacotado nao respondeu"; exit 1; }
+
+      - name: Guardar o .dmg
+        uses: actions/upload-artifact@v4
+        with:
+          name: mesa-playback-mac-arm64
+          path: dist/*.dmg
+
+  publicar:
+    needs: [windows, mac]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artefatos
+
+      - name: Juntar os arquivos
+        run: |
+          versao="${GITHUB_REF_NAME#v}"
+          mkdir saida
+          (cd artefatos/mesa-playback-windows-x64 && zip -qr "../../saida/Mesa-de-Playback-$versao-windows-x64.zip" "Mesa de Playback")
+          cp artefatos/mesa-playback-mac-arm64/*.dmg saida/
+          ls -la saida
+
+          notas=".github/notas/$GITHUB_REF_NAME.md"
+          titulo="$(head -n 1 "$notas" | sed -n 's/^# //p')"
+          echo "TITULO=${titulo:-$GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+          if [ -n "$titulo" ]; then tail -n +2 "$notas" > corpo.md; else cp "$notas" corpo.md; fi
+
+      - name: Publicar
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ env.TITULO }}
+          body_path: corpo.md
+          files: saida/*

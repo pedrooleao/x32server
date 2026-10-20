@@ -11,6 +11,8 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  # A release chama este mesmo fluxo para montar o .zip.
+  workflow_call:
 
 jobs:
   montar-e-testar:
