@@ -1,9 +1,11 @@
 # Monta, testa e publica uma release inteira a partir de uma tag.
 #
-#   git tag v0.7.0 && git push origin v0.7.0
-#
-# ou, sem tag, "Run workflow" nesta tela do Actions: a versao vem do
-# package.json e a tag e' criada junto com a release.
+# Dispara de tres jeitos:
+#   - as notas de uma versao chegam na main (.github/notas/vX.Y.Z.md) — o mais
+#     simples: subir a versao no package.json, escrever as notas, dar push;
+#   - uma tag: git tag v0.7.0 && git push origin v0.7.0;
+#   - "Run workflow" nesta tela do Actions.
+# Sem tag, a versao vem do package.json e a tag nasce junto com a release.
 #
 # Antes o .dmg saia de um Mac e o .zip do Windows era baixado do Actions e
 # subido a mao. Agora os dois saem daqui, de maquinas de verdade de cada
@@ -16,6 +18,8 @@ name: Release
 on:
   push:
     tags: ['v*']
+    branches: [main]
+    paths: ['.github/notas/**']
   workflow_dispatch:
 
 permissions:
