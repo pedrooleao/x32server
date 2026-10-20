@@ -91,13 +91,14 @@ estranho, abra **Mesa → Mostrar registro da WING** e mande o arquivo
 `wing-registro.txt`: ele guarda, byte a byte, o que o WING Edit pediu, que é o
 que falta para acertar.
 
-O WING Edit pode recusar uma mesa com firmware diferente do dele. A mesa diz
-que é uma WING Compact com firmware **3.0.5**, que é de onde veio o mapa de
-parâmetros. Para fingir outra versão, abra pelo Terminal:
+**"Incompatible Mixer Firmware"** — o WING Edit recusa mesa com firmware mais
+velho que ele. Em **Mesa → Firmware da WING**, escolha a versão do seu WING
+Edit (ou a mais próxima), desconecte e conecte de novo. A escolha fica
+lembrada. A mesa parte de **3.0.5**, que é de onde veio o mapa de parâmetros
+— entre versões ele muda pouco, e o que for novo e a mesa não conhecer o WING
+Edit só não encontra.
 
-```bash
-MESA_WING_FIRMWARE=3.1.0 npm start
-```
+Pelo Terminal também dá: `MESA_WING_FIRMWARE=3.1.1 npm start`.
 
 ## Preparar os stems
 

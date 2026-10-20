@@ -8,6 +8,7 @@ const { app, BrowserWindow, dialog, shell, Menu } = require('electron');
 const path = require('path');
 
 let janela = null;
+let mesa = null;   // o server.js, que tambem recebe ordens do menu
 
 // So uma copia por vez: duas disputariam as portas 10023 e 8080, e a segunda
 // morreria com um erro que ninguem entende.
@@ -29,7 +30,7 @@ function iniciar() {
   process.env.MESA_CONFIG_DIR = app.getPath('userData');
   process.env.MESA_ELECTRON = '1';
 
-  const mesa = require('./server.js');
+  mesa = require('./server.js');
 
   // A janela pede, aqui abrimos o seletor de pasta do sistema.
   mesa.on('escolherPasta', async () => {
@@ -174,6 +175,27 @@ function montarMenu(info) {
               buttons: ['Fechar'],
             });
           },
+        },
+        {
+          // O WING Edit recusa mesa com firmware mais velho que ele. Escolha a
+          // versao do WING Edit instalado; fica lembrada para a proxima vez.
+          label: 'Firmware da WING',
+          enabled: !!info.portaWing,
+          submenu: (info.versoesWing || []).map((v) => ({
+            label: v,
+            type: 'radio',
+            checked: v === info.firmwareWing,
+            click: () => {
+              mesa.firmwareWing(v);
+              dialog.showMessageBox({
+                type: 'info',
+                title: 'Firmware da WING',
+                message: `A mesa agora diz ter firmware ${v}.`,
+                detail: 'Desconecte e conecte de novo no WING Edit para ele ler a versão nova.',
+                buttons: ['Fechar'],
+              });
+            },
+          })),
         },
         {
           label: 'Mostrar registro da WING',

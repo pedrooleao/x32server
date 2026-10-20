@@ -240,6 +240,11 @@ udp.on('message', (msg, rinfo) => {
 // sem explicacao.
 const eventos = new EventEmitter();
 eventos.lembrarPasta = (dir) => lembrarPasta(dir);
+eventos.firmwareWing = (versao) => {
+  if (!wing) return;
+  wing.definirFirmware(versao);
+  gravarConfig({ firmwareWing: versao });
+};
 module.exports = eventos;
 
 function falhar(titulo, detalhe) {
@@ -270,6 +275,8 @@ udp.bind(OSC_PORT, () => {
     url: `http://localhost:${HTTP_PORT}`, ip: localIp(), porta: OSC_PORT,
     portaWing: wing ? wing.portaNativa : null,
     registroWing: wing ? wing.arquivoRegistro : null,
+    versoesWing: wing ? wing.versoes : [],
+    firmwareWing: wing ? wing.firmware : null,
   });
 });
 
@@ -310,22 +317,31 @@ const ARQ_CONFIG = path.join(
 );
 const EXT_AUDIO = /\.(wav|aiff?|mp3|m4a|flac|ogg|opus)$/i;
 
-let pastaStems = null;
-try {
-  pastaStems = JSON.parse(fs.readFileSync(ARQ_CONFIG, 'utf8')).pasta || null;
-  if (pastaStems && !fs.existsSync(pastaStems)) pastaStems = null;
-} catch {
-  pastaStems = null;
+function lerConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(ARQ_CONFIG, 'utf8')) || {};
+  } catch {
+    return {};
+  }
 }
+
+// Junta com o que ja estava: a pasta e o firmware da WING moram no mesmo
+// arquivo, e gravar so um apagaria o outro.
+function gravarConfig(mudanca) {
+  try {
+    fs.writeFileSync(ARQ_CONFIG, JSON.stringify({ ...lerConfig(), ...mudanca }, null, 2));
+  } catch (err) {
+    console.error('Nao consegui gravar as preferencias:', err.message);
+  }
+}
+
+let pastaStems = lerConfig().pasta || null;
+if (pastaStems && !fs.existsSync(pastaStems)) pastaStems = null;
 
 function lembrarPasta(dir) {
   pastaStems = dir;
   cabecalhos.clear();
-  try {
-    fs.writeFileSync(ARQ_CONFIG, JSON.stringify({ pasta: dir }, null, 2));
-  } catch (err) {
-    console.error('Nao consegui lembrar a pasta:', err.message);
-  }
+  gravarConfig({ pasta: dir });
   // 'escolhida' distingue o pedido explicito do usuario do aviso de abertura.
   // Sem isso a janela nao sabe se deve carregar por cima do que ja esta tocando.
   // E o 'nativo' precisa ir SEMPRE: faltando, a janela achava que nao havia
@@ -801,6 +817,7 @@ try {
     },
     medidores: () => ({ niveis: lastMeters, gr: lastGr }),
     pastaRegistro: path.dirname(ARQ_CONFIG),
+    firmware: lerConfig().firmwareWing,
     // Sem as portas da WING a mesa ainda serve ao Mixing Station: avisa e segue.
     aoFalhar: (porta, err) => {
       const motivo = err.code === 'EADDRINUSE' ? 'ja esta ocupada (outro emulador de WING aberto?)' : err.message;

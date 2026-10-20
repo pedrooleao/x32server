@@ -25,9 +25,18 @@ const { Ponte } = require('./ponte');
 const PORTA_NATIVA = 2222;
 const PORTA_OSC = 2223;
 
-// O WING Edit confere a versao da mesa. O esquema veio de uma mesa em 3.0.5,
-// entao e' isso que dizemos ser — da para trocar sem mexer no codigo.
-const FIRMWARE = process.env.MESA_WING_FIRMWARE || '3.0.5-0-g0c2b9d4a:release';
+// O WING Edit confere a versao da mesa e recusa a que for mais velha que ele
+// ("Incompatible Mixer Firmware"). O esquema veio de uma mesa em 3.0.5, mas a
+// arvore pouco muda entre versoes: o operador escolhe no menu a versao do WING
+// Edit que tem. O 3.0.5 fica de partida porque e' o que o esquema descreve.
+const VERSOES = ['3.0.5', '3.0.6', '3.1.0', '3.1.1', '3.2.0', '3.3.0', '3.3.1'];
+const FIRMWARE_PADRAO = '3.0.5';
+
+// Como a mesa escreve a versao: "3.0.5-0-g0c2b9d4a:release". O WING Edit le o
+// trecho antes do "-g" e mostra "3.0.5-0".
+function textoDoFirmware(v) {
+  return /[-:]/.test(v) ? v : `${v}-0-g0c2b9d4a:release`;
+}
 const MODELO = process.env.MESA_WING_MODELO || 'wing-compact';
 const SERIAL = process.env.MESA_WING_SERIAL || 'MESAPLAYBACK01';
 
@@ -45,6 +54,8 @@ function iniciarWing(o) {
   const {
     nome, ip, lerX32, escreverX32, aoTransporte, medidores, pastaRegistro, aoFalhar,
   } = o;
+  let versao = process.env.MESA_WING_FIRMWARE || o.firmware || FIRMWARE_PADRAO;
+  let FIRMWARE = textoDoFirmware(versao);
   const depurar = !!(process.env.MESA_DEBUG || process.env.MESA_WING_DEBUG);
 
   const arvore = new ArvoreWing();
@@ -613,6 +624,18 @@ function iniciarWing(o) {
   return {
     arvore,
     arquivoRegistro: arqRegistro,
+    versoes: VERSOES,
+    get firmware() {
+      return versao;
+    },
+    /** Passa a dizer outra versao. O WING Edit precisa reconectar para ver. */
+    definirFirmware(v) {
+      versao = v;
+      FIRMWARE = textoDoFirmware(v);
+      const no = arvore.noPorLogico('/$syscfg/$firmware');
+      if (no) definir(no, FIRMWARE, null);
+      registrar(`firmware agora e' ${FIRMWARE}`);
+    },
     portaNativa: PORTA_NATIVA,
     portaOsc: PORTA_OSC,
     /** Alguem (Mixing Station, o player) mudou este endereco da X32. */
@@ -630,4 +653,4 @@ function iniciarWing(o) {
   };
 }
 
-module.exports = { iniciarWing, PORTA_NATIVA, PORTA_OSC };
+module.exports = { iniciarWing, PORTA_NATIVA, PORTA_OSC, VERSOES };
