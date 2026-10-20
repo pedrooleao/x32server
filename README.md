@@ -94,9 +94,9 @@ que falta para acertar.
 **"Incompatible Mixer Firmware"** — o WING Edit recusa mesa com firmware mais
 velho que ele. Em **Mesa → Firmware da WING**, escolha a versão do seu WING
 Edit (ou a mais próxima), desconecte e conecte de novo. A escolha fica
-lembrada. A mesa parte de **3.0.5**, que é de onde veio o mapa de parâmetros
-— entre versões ele muda pouco, e o que for novo e a mesa não conhecer o WING
-Edit só não encontra.
+lembrada. A mesa parte de **3.3.3**, a do WING Edit mais novo testado. O mapa
+de parâmetros veio de uma mesa em 3.0.5 — entre versões ele muda pouco, e o
+que for novo e a mesa não conhecer o WING Edit só não encontra.
 
 Pelo Terminal também dá: `MESA_WING_FIRMWARE=3.1.1 npm start`.
 

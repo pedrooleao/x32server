@@ -28,9 +28,10 @@ const PORTA_OSC = 2223;
 // O WING Edit confere a versao da mesa e recusa a que for mais velha que ele
 // ("Incompatible Mixer Firmware"). O esquema veio de uma mesa em 3.0.5, mas a
 // arvore pouco muda entre versoes: o operador escolhe no menu a versao do WING
-// Edit que tem. O 3.0.5 fica de partida porque e' o que o esquema descreve.
-const VERSOES = ['3.0.5', '3.0.6', '3.1.0', '3.1.1', '3.2.0', '3.3.0', '3.3.1'];
-const FIRMWARE_PADRAO = '3.0.5';
+// Edit que tem. De partida vai a do WING Edit mais novo que ja vimos (3.3.3, num
+// Windows): com 3.0.5 ele recusava logo na descoberta.
+const VERSOES = ['3.0.5', '3.0.6', '3.1.0', '3.1.1', '3.2.0', '3.3.0', '3.3.1', '3.3.2', '3.3.3', '3.4.0'];
+const FIRMWARE_PADRAO = '3.3.3';
 
 // Como a mesa escreve a versao: "3.0.5-0-g0c2b9d4a:release". O WING Edit le o
 // trecho antes do "-g" e mostra "3.0.5-0".
