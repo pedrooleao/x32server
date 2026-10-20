@@ -1,6 +1,6 @@
 {
   "name": "mesa-playback",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Emula uma mesa X32 e uma WING na rede e toca os stems do playback, controlada pelo Mixing Station ou pelo WING Edit",
   "author": "Pedro",
   "license": "MIT",
